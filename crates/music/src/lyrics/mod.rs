@@ -129,6 +129,9 @@ const NAMELESS: u64 = 2;
 /// title can come out nothing like the reading the service filed it under — but the words it does
 /// get right are still there, and a name that shares none of them is another song.
 const READING_LEAST: f32 = 0.2;
+/// How much of a reading two names have to share to be taken for one name written two ways. The
+/// same name in another character set reads the same way twice, so little is left to chance.
+const READING_SAME: f32 = 0.8;
 
 /// Whether a song a service lists could be the recording being played. What is comparable has to
 /// agree: the title, or the credits. A field the two services write in different scripts — one in
@@ -177,17 +180,13 @@ fn scripts_differ(left: &str, right: &str) -> bool {
 /// letters the two do share are the only thing such a pair has in common, and they are enough to
 /// tell one song from another of the same length.
 fn reading_similarity(left: &str, right: &str) -> f32 {
-    let against = |latin: &str, other: &str| {
-        readings(other)
-            .iter()
-            .map(|reading| dice(&spelled(latin), reading))
-            .fold(0., f32::max)
-    };
-    match (written_in_latin(left), written_in_latin(right)) {
-        (true, false) => against(left, right),
-        (false, true) => against(right, left),
-        _ => 0.,
+    let mut best: f32 = 0.;
+    for left in readings(left) {
+        for right in readings(right) {
+            best = best.max(dice(&left, &right));
+        }
     }
+    best
 }
 
 /// How much two readings have in common, over the pairs of letters they are made of. Sound written
@@ -224,6 +223,9 @@ fn readings(text: &str) -> Vec<Vec<char>> {
         push(spelled(&romanized.text));
     }
     push(spelled(&japanese::romanize(text)));
+    if written_in_latin(text) {
+        push(spelled(text));
+    }
     found
 }
 
@@ -388,14 +390,29 @@ pub(crate) fn alike(left: &str, right: &str) -> bool {
     if left.is_empty() || right.is_empty() {
         return false;
     }
+    held(&left, &right) || reads_alike(&left, &right)
+}
+
+/// Whether one name holds the other whole, which is how a decorated title meets a plain one. The
+/// shorter side has to be at least half the longer, so two letters do not answer for a line of them.
+fn held(left: &str, right: &str) -> bool {
     if left == right {
         return true;
     }
     let (short, long) = match left.len() <= right.len() {
-        true => (&left, &right),
-        false => (&right, &left),
+        true => (left, right),
+        false => (right, left),
     };
-    long.contains(short.as_str()) && short.len() * 2 >= long.len()
+    long.contains(short) && short.len() * 2 >= long.len()
+}
+
+/// Whether two names read the same, near enough to be one name written two ways. This is what
+/// catches a name the two sides write in different character sets: a Chinese storefront writes
+/// 米津玄师 where the services write 米津玄師, and not a character of one is in the other, but both
+/// read "mijinxuanshi". Two names written the same way differ by whole readings instead, which is
+/// why most of the reading has to agree.
+fn reads_alike(left: &str, right: &str) -> bool {
+    reading_similarity(left, right) >= READING_SAME
 }
 
 /// Whether two credited-artist lines name anyone in common. Shared with the providers, as
