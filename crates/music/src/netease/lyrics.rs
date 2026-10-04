@@ -20,6 +20,14 @@ const GUESSED: u32 = 0;
 const SEARCH: &str = "https://music.163.com/api/search/get";
 const LYRIC: &str = "https://music.163.com/api/song/lyric/v1";
 const CANDIDATES: usize = 3;
+/// How far a side sheet's time may sit from the line it belongs to and still be taken for it, in
+/// milliseconds. Wide enough for the tens the site's own two timelines differ by, narrow enough
+/// that a line never takes its neighbour's words.
+const SIDE_NEAR: u128 = 250;
+/// How far a side sheet written for exactly this many lines may sit from them on a typical line and
+/// still be read by place, in milliseconds. A sheet cut for another version drifts by whole lines,
+/// which is seconds, and falls back to reading by time.
+const PAIRED_NEAR: u128 = 1_000;
 const AGENT: &str = concat!(
     "sonora/",
     env!("CARGO_PKG_VERSION"),
@@ -330,29 +338,74 @@ fn parse_yrc(yrc: &str) -> Vec<LyricsLine> {
 /// they are paired by their stamps rather than by their order, and a line a side sheet does not
 /// name keeps an empty entry of its own so the tracks stay lined up.
 fn add_tracks(lines: &mut [LyricsLine], sheet: &Sheet) {
-    let mut tracks: Vec<Vec<(Duration, String)>> = Vec::new();
+    let mut tracks: Vec<Side> = Vec::new();
     for verse in [&sheet.tlyric, &sheet.romalrc] {
         let Some(text) = verse.as_ref().and_then(|verse| verse.lyric.as_deref()) else {
             continue;
         };
         let stamped = stamped_lines(text);
         if !stamped.is_empty() {
-            tracks.push(stamped);
+            tracks.push(Side {
+                stamped,
+                pairs: false,
+            });
         }
     }
     if tracks.is_empty() {
         return;
     }
-    for line in lines {
+    for track in &mut tracks {
+        track.pairs = pairs_by_place(track.stamped.as_slice(), lines);
+    }
+    for (place, line) in lines.iter_mut().enumerate() {
         for track in &tracks {
-            let words = track
-                .iter()
-                .find(|(at, _)| at.as_millis() == line.start.as_millis())
-                .map(|(_, words)| words.clone())
-                .unwrap_or_default();
-            line.tracks.push(words);
+            line.tracks.push(track.words(line.start, place));
         }
     }
+}
+
+/// A side sheet with the times it was written at, and whether those times can be taken as one per
+/// line of the lyric.
+struct Side {
+    stamped: Vec<(Duration, String)>,
+    pairs: bool,
+}
+
+impl Side {
+    /// The words this sheet holds for the line at `place`, which starts at `time`. The site times
+    /// its side sheets against its own sheets and the two can disagree by the better part of a
+    /// second on a line without their order differing, so a sheet written for exactly this many
+    /// lines is read by place; anything else takes the nearest time within reach, and a line with
+    /// nothing to take keeps an empty entry so the tracks stay lined up.
+    fn words(&self, at: Duration, place: usize) -> String {
+        if self.pairs
+            && let Some((_, words)) = self.stamped.get(place)
+        {
+            return words.clone();
+        }
+        self.stamped
+            .iter()
+            .min_by_key(|(stamp, _)| stamp.as_millis().abs_diff(at.as_millis()))
+            .filter(|(stamp, _)| stamp.as_millis().abs_diff(at.as_millis()) <= SIDE_NEAR)
+            .map(|(_, words)| words.clone())
+            .unwrap_or_default()
+    }
+}
+
+/// Whether a side sheet holds one line for each line of the lyric, closely enough in time to be
+/// read by place. A sheet that skipped or added a line would otherwise shift every line after it,
+/// which reading by time does not do.
+fn pairs_by_place(stamped: &[(Duration, String)], lines: &[LyricsLine]) -> bool {
+    if stamped.len() != lines.len() {
+        return false;
+    }
+    let mut drift: Vec<u128> = stamped
+        .iter()
+        .zip(lines)
+        .map(|((stamp, _), line)| stamp.as_millis().abs_diff(line.start.as_millis()))
+        .collect();
+    drift.sort_unstable();
+    drift[drift.len() / 2] <= PAIRED_NEAR
 }
 
 /// A side sheet as the time and the words of each of its lines. A stamp that names no words, and
@@ -372,12 +425,12 @@ fn stamped_lines(text: &str) -> Vec<(Duration, String)> {
             stamps.push(at);
             rest = after.trim_start();
         }
-        let words = rest.trim();
-        if words.is_empty() {
-            continue;
-        }
+        // A stamped line with nothing on it is kept: the site leaves the lines of an instrumental
+        // break empty, and dropping them would leave a side sheet one entry short of the lyric's
+        // lines, so the two could no longer be read by place.
+        let words = rest.trim().to_owned();
         for at in stamps {
-            found.push((at, words.to_owned()));
+            found.push((at, words.clone()));
         }
     }
     found
