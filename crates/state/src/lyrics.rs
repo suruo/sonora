@@ -659,20 +659,8 @@ fn same(left: &LyricsHit, right: &LyricsHit) -> bool {
 
 fn ordered(query: &LyricsQuery, hits: Vec<LyricsHit>) -> Vec<LyricsHit> {
     let mut ranked = music::lyrics::rank(query, hits);
-    prefer_netease(&mut ranked);
     music::lyrics::reshape(&mut ranked);
     ranked
-}
-
-/// NetEase before Kugou. The two answer for much the same catalogue, and only one of them can be
-/// shown, so wherever NetEase answered at all its sheet is the one kept and Kugou is left to fill
-/// in the tracks NetEase could not answer for. Ranking has already thrown out the sheets that
-/// name a different recording, so this only picks between sheets that both fit.
-fn prefer_netease(hits: &mut Vec<LyricsHit>) {
-    if !hits.iter().any(|hit| hit.source == music::lyrics::NETEASE) {
-        return;
-    }
-    hits.retain(|hit| hit.source != music::lyrics::KUGOU);
 }
 
 #[derive(Clone, Default)]
