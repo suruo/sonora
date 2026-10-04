@@ -193,7 +193,12 @@ impl LyricsProvider for Kugou {
 
     async fn search(&self, query: &LyricsQuery) -> Result<Vec<LyricsHit>> {
         let wanted = format!("{} {}", query.artist, query.title);
-        let songs = shortlist(self.songs(&wanted).await?, query.duration);
+        let songs = shortlist(
+            self.songs(&wanted).await?,
+            &query.title,
+            &query.artist,
+            query.duration,
+        );
 
         let mut tasks = JoinSet::new();
         for song in songs {
@@ -233,8 +238,18 @@ impl LyricsProvider for Kugou {
     }
 }
 
-fn shortlist(songs: Vec<Song>, duration: Duration) -> Vec<Song> {
-    let mut songs = songs;
+/// The songs worth fetching sheets for: those that could be the recording being played, nearest in
+/// length first. The site answers a name search with its own idea of what fits, which includes
+/// other songs by the same artist and covers by other people, and every one of those left in would
+/// take the place of a song that could actually be the one being played.
+fn shortlist(songs: Vec<Song>, title: &str, artist: &str, duration: Duration) -> Vec<Song> {
+    let mut songs: Vec<Song> = songs
+        .into_iter()
+        .filter(|song| {
+            crate::lyrics::alike(&song.name, title)
+                && crate::lyrics::artists_alike(&song.singer, artist)
+        })
+        .collect();
     songs.sort_by_key(|song| {
         Duration::from_secs(song.duration)
             .as_secs()

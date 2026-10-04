@@ -265,7 +265,9 @@ fn fingerprint(lyrics: &Lyrics) -> String {
     }
 }
 
-fn alike(left: &str, right: &str) -> bool {
+/// Whether two titles name the same thing, decoration aside. Shared with the providers so
+/// they can drop the songs that never could be the one being played before fetching sheets.
+pub(crate) fn alike(left: &str, right: &str) -> bool {
     let (left, right) = (undecorated(left), undecorated(right));
     if left.is_empty() || right.is_empty() {
         return false;
@@ -280,7 +282,9 @@ fn alike(left: &str, right: &str) -> bool {
     long.contains(short.as_str()) && short.len() * 2 >= long.len()
 }
 
-fn artists_alike(left: &str, right: &str) -> bool {
+/// Whether two credited-artist lines name anyone in common. Shared with the providers, as
+/// [`alike`] is.
+pub(crate) fn artists_alike(left: &str, right: &str) -> bool {
     alike(left, right)
         || artist_names(left).any(|left| artist_names(right).any(|right| alike(left, right)))
 }

@@ -152,7 +152,7 @@ impl LyricsProvider for NetEase {
         let songs = answer.result.map(|result| result.songs).unwrap_or_default();
 
         let mut tasks = JoinSet::new();
-        for song in shortlist(songs, query.duration) {
+        for song in shortlist(songs, &query.title, &query.artist, query.duration) {
             let netease = Self {
                 http: self.http.clone(),
             };
@@ -176,8 +176,23 @@ impl LyricsProvider for NetEase {
     }
 }
 
-fn shortlist(songs: Vec<Song>, duration: Duration) -> Vec<Song> {
-    let mut songs = songs;
+/// The songs worth fetching sheets for: those that could be the recording being played, nearest in
+/// length first. A name search answers with records by other people and other songs of the same
+/// artist too, and one of those left in would take the place of a song that could be the one.
+fn shortlist(songs: Vec<Song>, title: &str, artist: &str, duration: Duration) -> Vec<Song> {
+    let mut songs: Vec<Song> = songs
+        .into_iter()
+        .filter(|song| {
+            let artists: String = song
+                .artists
+                .iter()
+                .filter_map(|artist| artist.name.clone())
+                .collect::<Vec<_>>()
+                .join(", ");
+            crate::lyrics::alike(&song.name, title)
+                && crate::lyrics::artists_alike(&artists, artist)
+        })
+        .collect();
     songs.sort_by_key(|song| {
         Duration::from_millis(song.duration)
             .as_secs()
@@ -488,9 +503,11 @@ mod tests {
     fn the_closest_durations_make_the_shortlist() {
         let song = |id: u64, duration: u64| Song {
             id,
-            name: String::new(),
+            name: "Jaded".to_owned(),
             duration,
-            artists: Vec::new(),
+            artists: vec![Named {
+                name: Some("Spiritbox".to_owned()),
+            }],
             album: None,
         };
         let songs = vec![
@@ -501,8 +518,37 @@ mod tests {
             song(5, 264_000),
         ];
 
-        let picked = shortlist(songs, Duration::from_secs(263));
+        let picked = shortlist(songs, "Jaded", "Spiritbox", Duration::from_secs(263));
         let ids: Vec<u64> = picked.iter().map(|song| song.id).collect();
         assert_eq!(ids, vec![2, 3, 5]);
+    }
+
+    #[test]
+    fn a_song_by_someone_else_is_no_candidate() {
+        let song = |id: u64, name: &str, artist: &str, duration: u64| Song {
+            id,
+            name: name.to_owned(),
+            duration,
+            artists: vec![Named {
+                name: Some(artist.to_owned()),
+            }],
+            album: None,
+        };
+        // another song of the artist's, a cover by someone else, and the recording itself, all
+        // within a few seconds of each other
+        let songs = vec![
+            song(
+                1,
+                "Ender Ember",
+                "MYTH & ROID, TK from 凛として時雨",
+                263_000,
+            ),
+            song(2, "Jaded", "Some Cover Band", 263_000),
+            song(3, "Jaded", "Spiritbox", 264_000),
+        ];
+
+        let picked = shortlist(songs, "Jaded", "Spiritbox", Duration::from_secs(263));
+        let ids: Vec<u64> = picked.iter().map(|song| song.id).collect();
+        assert_eq!(ids, vec![3]);
     }
 }
