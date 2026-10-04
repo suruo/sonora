@@ -14,7 +14,7 @@ use crate::{Lyrics, LyricsHit, LyricsLine, LyricsQuery, LyricsWord};
 /// The provider that reads a local file's own tags.
 pub const LOCAL: &str = "Local";
 /// The two Chinese services, which answer for much the same catalogue. A sheet names itself with
-/// one of these, so a caller can tell them apart when it wants one of them first.
+/// one of these, so a caller can tell them apart.
 pub const NETEASE: &str = "NetEase";
 pub const KUGOU: &str = "Kugou";
 
@@ -36,7 +36,7 @@ const TRUSTED: u32 = 25;
 /// What a sheet is worth over an otherwise identical one for having come with a track
 /// beside the words.
 const CARRIED: u32 = 10;
-
+/// Rank the sheets that answer for a track, best first, whatever source each came from.
 pub fn rank(query: &LyricsQuery, hits: Vec<LyricsHit>) -> Vec<LyricsHit> {
     let mut scored: Vec<(bool, i64, LyricsHit)> = hits
         .into_iter()
@@ -297,11 +297,6 @@ fn spelled(text: &str) -> Vec<char> {
         .collect()
 }
 
-/// How much of the track's own title a sheet's title carries, from none of it to all of it. What
-/// it measures is what the sheet adds to the words the two share: a sheet that calls them a
-/// remix, a live take or an instrumental carries less of the track than one that names it the way
-/// the track names itself, while a track whose own title carries its album's decoration is not
-/// held against a sheet that leaves that out.
 /// Whether two names could be one name written two ways, so that weighing how much of one the other
 /// carries means anything: the same name, or two names written in different scripts, where only the
 /// reading can tell. Two names in different non-Latin scripts cannot be, and are weighed by length
@@ -325,7 +320,11 @@ fn name_similarity(claimed: &str, wanted: &str, by_letters: fn(&str, &str) -> f3
     by_letters(claimed, wanted).max(reading_similarity(claimed, wanted))
 }
 
-/// A title weighed by the words it adds to another.
+/// How much of the track's own title a sheet's title carries, from none of it to all of it. What
+/// it measures is what the sheet adds to the words the two share: a sheet that calls them a
+/// remix, a live take or an instrumental carries less of the track than one that names it the way
+/// the track names itself, while a track whose own title carries its album's decoration is not
+/// held against a sheet that leaves that out.
 fn title_letters(claimed: &str, wanted: &str) -> f32 {
     let claimed = spelled(claimed);
     if claimed.is_empty() {
@@ -354,8 +353,6 @@ fn title_letters(claimed: &str, wanted: &str) -> f32 {
 /// sheet adds: one that credits a remixer or a guest alongside the track's own artists carries
 /// less of the track than one that credits them alone, while a sheet that leaves one of several
 /// artists out is not held against it.
-/// A credit weighed by the names it adds to another: a sheet that credits a remixer or a guest
-/// alongside the track's own artists carries less of the track than one that credits them alone.
 fn artist_letters(claimed: &str, wanted: &str) -> f32 {
     let claimed: Vec<String> = artist_names(claimed)
         .map(undecorated)
