@@ -120,19 +120,34 @@ fn matched(query: &LyricsQuery, hit: &LyricsHit) -> bool {
         })
 }
 
-/// Whether a song a service lists could be the recording being played. Its credits have to name
-/// the artist's, and either its title names the track or — when the two titles are written in
-/// different scripts, so that neither can name the other — its length agrees to the second. That
-/// last part is what catches a service that romanizes its titles: it calls a Japanese song by its
-/// reading, which shares no character with the name the Chinese services file it under, so its own
-/// title is no help at all. A sheet that names the track still scores its title and so comes first;
-/// this only lets the others in.
+/// How far two lengths may sit apart for a sheet that shares neither a title nor a credit with the
+/// track to still be taken for it, in seconds. Tighter than what a sheet with a name to show for is
+/// given, because nothing but the length is left to go on.
+const NAMELESS: u64 = 2;
+
+/// Whether a song a service lists could be the recording being played. What is comparable has to
+/// agree: the title, or the credits. A field the two services write in different scripts — one in
+/// Latin letters and the other not, so that neither can name the other — is not comparable at all,
+/// and is then weighed by length instead; when both the song and its artist are written that way,
+/// which is what a service that romanizes everything leaves, the length is all there is. A sheet
+/// that names the track still scores its title and so comes first; this only lets the others in.
 pub(crate) fn could_be(query: &LyricsQuery, title: &str, artist: &str, seconds: u64) -> bool {
-    artists_alike(artist, &query.artist)
-        && (alike(title, &query.title)
-            || (scripts_differ(title, &query.title)
-                && !query.duration.is_zero()
-                && seconds.abs_diff(query.duration.as_secs()) <= CLOSE_ENOUGH))
+    let close = |window: u64| {
+        !query.duration.is_zero() && seconds.abs_diff(query.duration.as_secs()) <= window
+    };
+    match (
+        artists_alike(artist, &query.artist),
+        alike(title, &query.title),
+    ) {
+        (true, true) => true,
+        (true, false) => scripts_differ(title, &query.title) && close(CLOSE_ENOUGH),
+        (false, true) => scripts_differ(artist, &query.artist) && close(CLOSE_ENOUGH),
+        (false, false) => {
+            scripts_differ(title, &query.title)
+                && scripts_differ(artist, &query.artist)
+                && close(NAMELESS)
+        }
+    }
 }
 
 /// Whether a title is written in Latin letters and no others.
@@ -542,6 +557,27 @@ mod tests {
         let ranked = rank(&query, vec![hit("打上花火", "DAOKO", 289, true)]);
 
         assert_eq!(ranked.len(), 1);
+    }
+
+    #[test]
+    fn a_song_filed_under_another_script_with_another_name_for_its_artist_is_taken_by_length() {
+        let query = LyricsQuery {
+            title: "Uchiagehanabi".to_owned(),
+            artist: "Kenshi Yonezu".to_owned(),
+            album: None,
+            duration: Duration::from_secs(289),
+            track: None,
+        };
+
+        // both the song and the credit are written the site's own way, which is what a service
+        // that romanizes everything leaves behind
+        let ranked = rank(&query, vec![hit("打上花火", "米津玄師", 289, true)]);
+        assert_eq!(ranked.len(), 1);
+
+        // a length that does not agree is all it takes to be turned away, since that is all there
+        // was to go on
+        let lost = rank(&query, vec![hit("打上花火", "米津玄師", 293, true)]);
+        assert!(lost.is_empty());
     }
 
     #[test]
