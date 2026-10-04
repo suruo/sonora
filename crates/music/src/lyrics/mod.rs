@@ -21,9 +21,11 @@ pub const KUGOU: &str = "Kugou";
 const CLOSE_ENOUGH: u64 = 3;
 const WAY_OFF: u64 = 10;
 /// What a sheet that runs to the track's own length is worth, and what every second it misses that
-/// length by costs it, down to nothing at the length nothing more can be told from.
+/// length by, past the window that already counts as the same length, costs it — down to nothing at
+/// the length nothing more can be told from. Two services time one recording off different masters,
+/// so a second or two either way is their doing, not a sign of another recording.
 const LENGTH: u32 = 100;
-const LENGTH_STEP: u32 = 10;
+const LENGTH_STEP: u32 = 15;
 const TITLE: u32 = 40;
 const ARTIST: u32 = 30;
 const ALBUM: u32 = 15;
@@ -244,8 +246,13 @@ pub fn score(query: &LyricsQuery, hit: &LyricsHit) -> i64 {
     if let Some(duration) = hit.duration
         && !query.duration.is_zero()
     {
+        // a sheet loses nothing for the second or two the two services time one recording
+        // differently by, so inside that window the names are what tell one sheet from another
         let drift = duration.as_secs().abs_diff(query.duration.as_secs());
-        score += i64::from(LENGTH) - i64::from(drift.min(WAY_OFF) as u32) * i64::from(LENGTH_STEP);
+        let past = drift
+            .saturating_sub(CLOSE_ENOUGH)
+            .min(WAY_OFF - CLOSE_ENOUGH) as u32;
+        score += i64::from(LENGTH.saturating_sub(past * LENGTH_STEP));
     }
     if comparable(&hit.title, &query.title) {
         score += (f64::from(TITLE)
