@@ -160,7 +160,7 @@ fn filed(text: &str) -> Option<Vec<LyricsLine>> {
             words: worded(&line.words),
             text: line.text,
             romanized: None,
-            translated: None,
+            tracks: Vec::new(),
             secondary: Vec::new(),
             voice: Voice::Lead,
         })

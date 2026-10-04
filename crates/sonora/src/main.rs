@@ -122,8 +122,8 @@ fn main() {
             Arc::new(music::binimum::Binimum::new()),
             Arc::new(music::musixmatch::Musixmatch::new()),
             Arc::new(music::lrclib::LrcLib::new()),
-            Arc::new(music::kugou::Kugou::new()),
             Arc::new(music::netease::NetEase::new()),
+            Arc::new(music::kugou::Kugou::new()),
         ];
         state::init(cx, io, database, providers, local_provider, lyrics);
         #[cfg(target_os = "windows")]

@@ -83,8 +83,8 @@ pub(crate) fn conform(worded: &Lyrics, guide: &Lyrics) -> Option<Lyrics> {
             end: Some(end.max(start)),
             text: line.text.clone(),
             romanized: None,
-            // The words come from the guide, so its translation comes with them.
-            translated: line.translated.clone(),
+            // The words come from the guide, so what came beside them comes with them.
+            tracks: line.tracks.clone(),
             words: Some(words),
             secondary: Vec::new(),
             voice: Voice::Lead,

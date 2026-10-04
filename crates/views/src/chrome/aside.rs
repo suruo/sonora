@@ -197,6 +197,58 @@ enum Warm {
     Break(usize),
 }
 
+/// Which of the tracks that came with the sheet the panel draws under the words, besides the
+/// words themselves, which are always drawn. How many there are is whatever the sheet turned out
+/// to carry, so a track is picked by its place rather than by what it holds. Pronunciation is not
+/// one of these: whether Sonora's own is drawn is the settings' business, and it is drawn
+/// whenever they ask for it, beside whichever track is chosen here.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AsideTrack {
+    /// The track at this place in the sheet, counting from the first.
+    Place(usize),
+    /// The words alone, hiding whatever else came with them.
+    Words,
+}
+
+impl AsideTrack {
+    /// What this choice comes to for a sheet that carries `tracks` tracks. A choice the sheet
+    /// cannot honour gives way to the first track it has, so a sheet with fewer tracks than the
+    /// last one does not leave the panel showing nothing; `Words` is a choice to see the words
+    /// alone and is always honoured.
+    fn resolve(self, tracks: usize) -> Self {
+        match self {
+            Self::Words => Self::Words,
+            Self::Place(place) if place < tracks => self,
+            _ => match tracks {
+                0 => Self::Words,
+                _ => Self::Place(0),
+            },
+        }
+    }
+
+    /// The choice after this one, wrapping through `tracks` tracks and ending at
+    /// [`AsideTrack::Words`].
+    fn next(self, tracks: usize) -> Self {
+        let last = tracks.saturating_sub(1);
+        match self {
+            Self::Place(place) if place < last => Self::Place(place + 1),
+            Self::Place(_) => Self::Words,
+            Self::Words => match tracks {
+                0 => Self::Words,
+                _ => Self::Place(0),
+            },
+        }
+    }
+
+    /// The track this choice names, when it names one.
+    fn place(self) -> Option<usize> {
+        match self {
+            Self::Place(place) => Some(place),
+            Self::Words => None,
+        }
+    }
+}
+
 /// How near the pointer a spot is, and how far it has been pressed.
 #[derive(Clone, Copy, Default)]
 struct Touch {
@@ -259,6 +311,8 @@ pub(crate) struct Aside {
     lyrics: Entity<Lyrics>,
     settings: Entity<AppSettings>,
     tab: SideTab,
+    /// Which extra track the panel draws under the words, as far as the sheet can honour it.
+    track: AsideTrack,
     verse_bar: Entity<Scrollbar>,
     followed: Option<usize>,
     nudges: u64,
@@ -353,6 +407,7 @@ impl Aside {
             lyrics,
             settings,
             tab,
+            track: AsideTrack::Place(0),
             verse_bar,
             followed: None,
             nudges: 0,
@@ -833,6 +888,7 @@ impl Aside {
     fn header(
         &self,
         sections: Sections,
+        switch: Option<gpui::AnyElement>,
         window: &Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
@@ -858,6 +914,7 @@ impl Aside {
             .when(!self.titled, |this| {
                 this.justify_end().pr(theme.metrics.control + px(8.))
             })
+            .when(self.tab == SideTab::Lyrics, |this| this.children(switch))
             .when(self.tab == SideTab::Queue, |this| {
                 this.child(
                     div()
@@ -910,6 +967,47 @@ impl Aside {
                         ),
                 )
             })
+    }
+
+    /// The control the panel's corner offers when the sheet on show carries more than its words.
+    /// Pressing it steps to the track after the one drawn, and past the last one back to the
+    /// words alone; a sheet with nothing to step through gets no control at all. The tracks are
+    /// numbered rather than named, because the services file readings and translations under the
+    /// same heading and only whoever is reading them can say which is which.
+    fn track_switch(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let theme = *cx.theme();
+        let shown = self
+            .lyrics
+            .read(cx)
+            .current()
+            .map(|hit| hit.lyrics.clone())?;
+        let tracks = tracks_in(&shown);
+        if tracks == 0 {
+            return None;
+        }
+
+        let current = self.track.resolve(tracks);
+        let next = current.next(tracks);
+        let label = match current.place() {
+            Some(place) => t!("lyrics-track-number", number = place + 1),
+            None => t!("lyrics-track-words"),
+        };
+        Some(
+            Button::new("lyrics-track")
+                .ghost()
+                .small()
+                .label(label)
+                .tooltip("lyrics-track-switch")
+                .tint(match current {
+                    AsideTrack::Words => theme.muted_foreground,
+                    AsideTrack::Place(_) => theme.primary,
+                })
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.track = next;
+                    cx.notify();
+                }))
+                .into_any_element(),
+        )
     }
 
     fn follow(&self, cx: &mut Context<Self>) -> Option<Div> {
@@ -968,16 +1066,20 @@ impl Aside {
             .map(|hit| (hit.source, hit.writers.clone()));
         let following = lyrics.following().map(str::to_owned);
         let take = lyrics.revision();
-        let (karaoke_lyrics, romanization_scripts, translated_lyrics) = {
+        let (karaoke_lyrics, romanization_scripts) = {
             let settings = self.settings.read(cx);
             (
                 settings.karaoke_lyrics(),
                 settings
                     .romanized_lyrics()
                     .then(|| settings.romanization_scripts()),
-                settings.translated_lyrics(),
             )
         };
+        let tracks = match &shown {
+            Some(lyrics) => tracks_in(lyrics),
+            None => 0,
+        };
+        let chosen_track = self.track.resolve(tracks).place();
         let karaoke_effects = karaoke_lyrics && effects();
         let scale = match self.titled {
             true => self.settings.read(cx).panel_lyrics_scale(),
@@ -1272,10 +1374,12 @@ impl Aside {
                             .child(SharedString::from(line.text.clone()))
                             .into_any_element(),
                     };
-                    let translated_line = match translated_lyrics {
-                        true => line.translated.clone(),
-                        false => None,
-                    };
+                    let chosen_line = chosen_track.and_then(|place| {
+                        line.tracks
+                            .get(place)
+                            .filter(|text| !text.trim().is_empty())
+                            .cloned()
+                    });
                     let fade = match (line.secondary.is_empty(), active, departing) {
                         (true, _, _) => None,
                         (_, true, _) => Some(("lane-in", self.arrival, growing)),
@@ -1345,7 +1449,7 @@ impl Aside {
                             selected_romanization(&line.romanized, romanization_scripts),
                             |this, text| this.child(muted_lyrics_lane(text, lane_size, &theme)),
                         )
-                        .when_some(translated_line, |this, text| {
+                        .when_some(chosen_line, |this, text| {
                             this.child(muted_lyrics_lane(text, lane_size, &theme))
                         })
                         .children(lanes)
@@ -1795,6 +1899,11 @@ impl Render for Aside {
             self.pin(sections, window, cx);
         }
 
+        let switch = match self.tab {
+            SideTab::Lyrics => self.track_switch(cx),
+            SideTab::Queue => None,
+        };
+
         div()
             .id("aside")
             .flex()
@@ -1807,9 +1916,10 @@ impl Render for Aside {
                     cx.notify();
                 }
             }))
-            .when(self.titled || self.tab == SideTab::Queue, |this| {
-                this.child(self.header(sections, window, cx))
-            })
+            .when(
+                self.titled || self.tab == SideTab::Queue || switch.is_some(),
+                |this| this.child(self.header(sections, switch, window, cx)),
+            )
             .child(
                 div()
                     .id("queue-drop")
@@ -2142,6 +2252,19 @@ fn selected_romanization(
     scripts?
         .contains(romanized.writing_system)
         .then(|| romanized.text.clone())
+}
+
+/// How many tracks a sheet carries under its words. The services file as many as whoever made
+/// the sheet left, and nothing here says what any of them is.
+fn tracks_in(lyrics: &music::Lyrics) -> usize {
+    let music::Lyrics::Synced { lines } = lyrics else {
+        return 0;
+    };
+    lines
+        .iter()
+        .map(|line| line.tracks.len())
+        .max()
+        .unwrap_or_default()
 }
 
 /// A line drawn under the words it belongs to: a pronunciation or a translation, in the panel's
@@ -2928,7 +3051,7 @@ mod tests {
                 end: Some(Duration::from_secs(5)),
                 text: "first".to_owned(),
                 romanized: None,
-                translated: None,
+                tracks: Vec::new(),
                 words: None,
                 secondary: Vec::new(),
                 voice: Voice::Lead,
@@ -2938,7 +3061,7 @@ mod tests {
                 end: Some(Duration::from_secs(15)),
                 text: "second".to_owned(),
                 romanized: None,
-                translated: None,
+                tracks: Vec::new(),
                 words: None,
                 secondary: Vec::new(),
                 voice: Voice::Lead,
@@ -2960,7 +3083,7 @@ mod tests {
                 end: Some(Duration::from_secs(12)),
                 text: "first".to_owned(),
                 romanized: None,
-                translated: None,
+                tracks: Vec::new(),
                 words: Some(vec![LyricsWord {
                     start: Duration::from_secs(2),
                     end: Duration::from_secs(5),
@@ -2974,7 +3097,7 @@ mod tests {
                 end: Some(Duration::from_secs(15)),
                 text: "second".to_owned(),
                 romanized: None,
-                translated: None,
+                tracks: Vec::new(),
                 words: None,
                 secondary: Vec::new(),
                 voice: Voice::Lead,
@@ -3140,7 +3263,7 @@ mod tests {
             end: Some(Duration::from_secs(8)),
             text: "Wake me up inside".to_owned(),
             romanized: None,
-            translated: None,
+            tracks: Vec::new(),
             words: Some(vec![LyricsWord {
                 start: Duration::from_secs(2),
                 end: Duration::from_secs(8),
@@ -3179,7 +3302,7 @@ mod tests {
             end: Some(Duration::from_secs(5)),
             text: "line".to_owned(),
             romanized: None,
-            translated: None,
+            tracks: Vec::new(),
             words: Some(vec![LyricsWord {
                 start: Duration::from_secs(2),
                 end: Duration::from_secs(5),
@@ -3199,7 +3322,7 @@ mod tests {
             end: Some(Duration::from_secs(8)),
             text: "Wake me up inside".to_owned(),
             romanized: None,
-            translated: None,
+            tracks: Vec::new(),
             words: Some(vec![LyricsWord {
                 start: Duration::from_secs(2),
                 end: Duration::from_secs(8),
@@ -3235,7 +3358,7 @@ mod tests {
             end: Some(Duration::from_secs(8)),
             text: "Wake me up inside".to_owned(),
             romanized: None,
-            translated: None,
+            tracks: Vec::new(),
             words: Some(vec![LyricsWord {
                 start: Duration::from_secs(2),
                 end: Duration::from_secs(8),
@@ -3274,7 +3397,7 @@ mod tests {
             end: Some(Duration::from_secs(5)),
             text: "line".to_owned(),
             romanized: None,
-            translated: None,
+            tracks: Vec::new(),
             words: None,
             secondary: Vec::new(),
             voice: Voice::Lead,

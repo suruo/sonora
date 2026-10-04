@@ -8,7 +8,7 @@ use tokio::task::JoinSet;
 use crate::lyrics::lrc;
 use crate::{Lyrics, LyricsHit, LyricsLine, LyricsProvider, LyricsQuery, LyricsWord, Voice};
 
-const SOURCE: &str = "NetEase";
+const SOURCE: &str = crate::lyrics::NETEASE;
 /// The provider's slug. A query names the track's origin by slug, which is not the display name
 /// in [`SOURCE`], and only a track that came from this site can be asked for by id.
 const SLUG: &str = "netease";
@@ -45,7 +45,7 @@ impl NetEase {
             .query(&[
                 ("lv", "0"),
                 ("tv", "1"),
-                ("rv", "0"),
+                ("rv", "1"),
                 ("kv", "0"),
                 ("yv", "0"),
                 ("ytv", "0"),
@@ -106,6 +106,8 @@ struct Sheet {
     yrc: Option<Verse>,
     /// The translation, which the site hands over as a sheet of its own, timed like the lyric.
     tlyric: Option<Verse>,
+    /// The reading, handed over the same way and timed the same way.
+    romalrc: Option<Verse>,
     #[serde(default, rename = "pureMusic")]
     pure_music: bool,
 }
@@ -220,7 +222,7 @@ fn sheet_hit(named: &LyricsQuery, sheet: &Sheet, trust: u32) -> Option<LyricsHit
             if !crate::lyrics::sheet::headed(&mut lines, &named.title, &artists) {
                 return None;
             }
-            add_translations(&mut lines, &sheet.tlyric);
+            add_tracks(&mut lines, sheet);
             Lyrics::Synced {
                 lines: lines.into(),
             }
@@ -308,30 +310,39 @@ fn parse_yrc(yrc: &str) -> Vec<LyricsLine> {
     lines
 }
 
-/// Gives each line the translation written at its own time. The site times its translation the
-/// way it times the lyric, so the two sheets are paired by their stamps rather than by their
-/// order, and a line the translation does not name keeps its own words alone.
-fn add_translations(lines: &mut [LyricsLine], tlyric: &Option<Verse>) {
-    let Some(text) = tlyric.as_ref().and_then(|verse| verse.lyric.as_deref()) else {
-        return;
-    };
-    if text.trim().is_empty() {
+/// Gives each line whatever the sheet's own side sheets hold at its time, one entry per side
+/// sheet in the order the sheet files them. The site times those the way it times the lyric, so
+/// they are paired by their stamps rather than by their order, and a line a side sheet does not
+/// name keeps an empty entry of its own so the tracks stay lined up.
+fn add_tracks(lines: &mut [LyricsLine], sheet: &Sheet) {
+    let mut tracks: Vec<Vec<(Duration, String)>> = Vec::new();
+    for verse in [&sheet.tlyric, &sheet.romalrc] {
+        let Some(text) = verse.as_ref().and_then(|verse| verse.lyric.as_deref()) else {
+            continue;
+        };
+        let stamped = stamped_lines(text);
+        if !stamped.is_empty() {
+            tracks.push(stamped);
+        }
+    }
+    if tracks.is_empty() {
         return;
     }
-    let translated = translation_lines(text);
     for line in lines {
-        if let Some((_, words)) = translated
-            .iter()
-            .find(|(at, _)| at.as_millis() == line.start.as_millis())
-        {
-            line.translated = Some(words.clone());
+        for track in &tracks {
+            let words = track
+                .iter()
+                .find(|(at, _)| at.as_millis() == line.start.as_millis())
+                .map(|(_, words)| words.clone())
+                .unwrap_or_default();
+            line.tracks.push(words);
         }
     }
 }
 
-/// A translation sheet as the time and the words of each of its lines. A stamp that names no
-/// words, and the sheet's own offset tag, are left out the way a lyric sheet's are.
-fn translation_lines(text: &str) -> Vec<(Duration, String)> {
+/// A side sheet as the time and the words of each of its lines. A stamp that names no words, and
+/// the sheet's own offset tag, are left out the way a lyric sheet's are.
+fn stamped_lines(text: &str) -> Vec<(Duration, String)> {
     let mut found = Vec::new();
     for line in text.lines() {
         let mut rest = line.trim_start();
@@ -398,7 +409,7 @@ fn read_yrc(line: &str) -> Option<LyricsLine> {
         words: (!words.is_empty()).then_some(words),
         text,
         romanized: None,
-        translated: None,
+        tracks: Vec::new(),
         secondary: Vec::new(),
         voice: Voice::Lead,
     })

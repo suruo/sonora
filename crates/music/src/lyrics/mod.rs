@@ -13,6 +13,10 @@ use crate::{Lyrics, LyricsHit, LyricsLine, LyricsQuery, LyricsWord};
 
 /// The provider that reads a local file's own tags.
 pub const LOCAL: &str = "Local";
+/// The two Chinese services, which answer for much the same catalogue. A sheet names itself with
+/// one of these, so a caller can tell them apart when it wants one of them first.
+pub const NETEASE: &str = "NetEase";
+pub const KUGOU: &str = "Kugou";
 
 const CLOSE_ENOUGH: u64 = 3;
 const WAY_OFF: u64 = 10;
@@ -24,6 +28,9 @@ const WORDED: u32 = 400;
 const DRIFTED: u32 = 50;
 const TRUNCATED: u32 = 500;
 const TRUSTED: u32 = 25;
+/// What a sheet is worth over an otherwise identical one for having come with a track
+/// beside the words.
+const CARRIED: u32 = 10;
 
 pub fn rank(query: &LyricsQuery, hits: Vec<LyricsHit>) -> Vec<LyricsHit> {
     let mut scored: Vec<(i64, LyricsHit)> = hits
@@ -118,6 +125,9 @@ pub fn score(query: &LyricsQuery, hit: &LyricsHit) -> i64 {
     }
     if hit.lyrics.worded() {
         score += i64::from(WORDED);
+    }
+    if hit.lyrics.carries_extras() {
+        score += i64::from(CARRIED);
     }
     if truncated(&hit.lyrics, query.duration) {
         score -= i64::from(TRUNCATED);
@@ -285,7 +295,7 @@ mod tests {
             end: Some(Duration::from_secs(end)),
             text: text.to_owned(),
             romanized: None,
-            translated: None,
+            tracks: Vec::new(),
             words: None,
             secondary: Vec::new(),
             voice: Voice::Lead,

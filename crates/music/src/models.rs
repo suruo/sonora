@@ -307,6 +307,18 @@ impl Lyrics {
         matches!(self, Self::Synced { .. })
     }
 
+    /// Whether any line came with a track beside the words. Two sheets for the same recording can
+    /// differ in little else, and the one that also says something about the words is the one
+    /// worth showing.
+    pub fn carries_extras(&self) -> bool {
+        match self {
+            Self::Plain { .. } => false,
+            Self::Synced { lines } => lines
+                .iter()
+                .any(|line| line.tracks.iter().any(|track| !track.trim().is_empty())),
+        }
+    }
+
     pub fn worded(&self) -> bool {
         match self {
             Self::Plain { .. } => false,
@@ -340,11 +352,13 @@ pub struct LyricsLine {
     pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub romanized: Option<RomanizedText>,
-    /// What the line says in another language, when the service that supplied the lyrics
-    /// supplied a translation too. Sonora never translates anything itself, so a service that
-    /// ships none leaves this `None`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub translated: Option<String>,
+    /// The tracks the service filed beside the words, one entry per track it sent, in the order
+    /// it sent them. Nothing here says what a track is: the services file translations,
+    /// transliterations and readings under the same headings, so a caller offers them as they
+    /// came. A service that sent none leaves this empty, and a track with nothing for this line
+    /// leaves its own entry empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tracks: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub words: Option<Vec<LyricsWord>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

@@ -13,16 +13,13 @@ use crate::{
     Lyrics, LyricsHit, LyricsLine, LyricsProvider, LyricsQuery, LyricsWord, Voice, escape,
 };
 
-const SOURCE: &str = "Kugou";
+const SOURCE: &str = crate::lyrics::KUGOU;
 const SEARCH: &str = "https://mobiles.kugou.com/api/v3/search/song";
 const CANDIDATES: &str = "https://lyrics.kugou.com/search";
 const DOWNLOAD: &str = "https://lyrics.kugou.com/download";
 const SONGS: usize = 4;
 const PAGE: usize = 20;
 const SHEETS: usize = 2;
-/// The kind the site files a translation under in a sheet's language track. The one it files
-/// under `0` is a pronunciation, which Sonora romanizes itself.
-const TRANSLATION: u8 = 1;
 const CIPHER: [u8; 16] = [
     0x40, 0x47, 0x61, 0x77, 0x5e, 0x32, 0x74, 0x47, 0x51, 0x36, 0x31, 0x2d, 0xce, 0xd2, 0x6e, 0x69,
 ];
@@ -179,14 +176,13 @@ struct Language {
     content: Vec<LanguageTrack>,
 }
 
-/// One track of a language header: the kind of help it holds, and the line it holds for each of
-/// the sheet's timed lines, split into the pieces the site timed.
+/// One track of a language header: the line it holds for each of the sheet's timed lines, split
+/// into the pieces the site timed. What the track is filed as is left out, because the site files
+/// readings and translations alike.
 #[derive(Deserialize)]
 struct LanguageTrack {
     #[serde(default, rename = "lyricContent")]
     lines: Vec<Vec<String>>,
-    #[serde(default, rename = "type")]
-    kind: u8,
 }
 
 #[async_trait]
@@ -275,7 +271,7 @@ fn decode(content: &str) -> Result<String> {
 }
 
 fn hit(song: &Song, krc: &str, title: &str) -> Option<LyricsHit> {
-    let mut lines = parse(krc, &translations(krc));
+    let mut lines = parse(krc, &tracks(krc));
     let artists: Vec<String> = song
         .singer
         .split(['、', ',', '&'])
@@ -310,10 +306,10 @@ fn hit(song: &Song, krc: &str, title: &str) -> Option<LyricsHit> {
     })
 }
 
-/// The sheet's timed lines, each carrying the translation the sheet's own language track holds
-/// at the same position. That track counts every timed line, including the ones [`read`] drops
-/// for holding no words, so the two stay in step.
-fn parse(krc: &str, translated: &[String]) -> Vec<LyricsLine> {
+/// The sheet's timed lines, each carrying whatever the sheet's own language tracks hold at the
+/// same position. Those tracks count every timed line, including the ones [`read`] drops for
+/// holding no words, so the two stay in step.
+fn parse(krc: &str, tracks: &[Vec<String>]) -> Vec<LyricsLine> {
     let mut seen = 0usize;
     let mut lines = Vec::new();
     for line in krc.lines() {
@@ -325,11 +321,16 @@ fn parse(krc: &str, translated: &[String]) -> Vec<LyricsLine> {
         let Some(mut lyrics) = read(line) else {
             continue;
         };
-        lyrics.translated = translated
-            .get(index)
-            .map(|text| text.trim())
-            .filter(|text| !text.is_empty())
-            .map(str::to_owned);
+        lyrics.tracks = tracks
+            .iter()
+            .map(|track| {
+                track
+                    .get(index)
+                    .map(|text| text.trim())
+                    .unwrap_or_default()
+                    .to_owned()
+            })
+            .collect();
         lines.push(lyrics);
     }
     lines
@@ -382,7 +383,7 @@ fn read(line: &str) -> Option<LyricsLine> {
         words: (!words.is_empty()).then_some(words),
         text,
         romanized: None,
-        translated: None,
+        tracks: Vec::new(),
         secondary: Vec::new(),
         voice: Voice::Lead,
     })
@@ -403,10 +404,11 @@ fn stamp_of(stamp: &str) -> Option<(Duration, Duration)> {
     Some((Duration::from_millis(at), Duration::from_millis(length)))
 }
 
-/// The translation a sheet carries, one line for each of its timed lines. The site hands it over
-/// as base64 json in the sheet's own `[language:…]` header, beside a pronunciation under another
-/// kind; only the translation is read, and a sheet without one answers nothing.
-fn translations(krc: &str) -> Vec<String> {
+/// The language tracks a sheet carries, each as one line for every one of the sheet's timed lines.
+/// The site hands them over as base64 json in the sheet's own `[language:…]` header, and files as
+/// many as whoever uploaded the sheet made: a reading, a translation, or a transliteration of the
+/// words, without saying which is which. A sheet with none answers nothing.
+fn tracks(krc: &str) -> Vec<Vec<String>> {
     let Some(payload) = krc
         .lines()
         .find_map(|line| line.trim().strip_prefix("[language:"))
@@ -416,15 +418,14 @@ fn translations(krc: &str) -> Vec<String> {
         return Vec::new();
     };
     let Ok(language) = serde_json::from_slice::<Language>(&payload) else {
-        log::debug!("lyrics: cannot read the kugou language track");
+        log::debug!("lyrics: cannot read the kugou language tracks");
         return Vec::new();
     };
     language
         .content
         .into_iter()
-        .find(|track| track.kind == TRANSLATION)
         .map(|track| track.lines.into_iter().map(|line| line.concat()).collect())
-        .unwrap_or_default()
+        .collect()
 }
 
 /// The bytes a base64 payload stands for. The site leaves its padding off, so it is put back.

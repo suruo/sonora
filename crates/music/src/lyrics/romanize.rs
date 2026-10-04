@@ -143,7 +143,7 @@ mod tests {
             end: None,
             text: "Привет".to_owned(),
             romanized: None,
-            translated: None,
+            tracks: Vec::new(),
             words: None,
             secondary: vec![LyricsLane {
                 start: Duration::ZERO,

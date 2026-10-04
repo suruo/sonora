@@ -173,7 +173,6 @@ enum Slot {
     PreferLocalLyrics,
     Karaoke,
     Romanized,
-    Translated,
     LyricsForLocal,
     ArtworkForLocal,
     Discord,
@@ -627,7 +626,7 @@ impl SettingsView {
                 {
                     slots.push(Slot::PreferLocalLyrics);
                 }
-                slots.extend([Slot::Karaoke, Slot::Romanized, Slot::Translated]);
+                slots.extend([Slot::Karaoke, Slot::Romanized]);
                 slots
             }
             SettingsTab::Privacy => {
@@ -791,10 +790,6 @@ impl SettingsView {
             Slot::Romanized => (
                 t!("settings-romanized-lyrics"),
                 t!("settings-romanized-lyrics-detail"),
-            ),
-            Slot::Translated => (
-                t!("settings-translated-lyrics"),
-                t!("settings-translated-lyrics-detail"),
             ),
             Slot::LyricsForLocal => (
                 t!("settings-lyrics-for-local-files"),
@@ -989,7 +984,6 @@ impl SettingsView {
             Slot::PreferLocalLyrics => self.prefer_local_lyrics_row(cx).element,
             Slot::Karaoke => self.karaoke_lyrics_row(cx).element,
             Slot::Romanized => self.romanized_lyrics_row(cx).element,
-            Slot::Translated => self.translated_lyrics_row(cx).element,
             Slot::LyricsForLocal => self.lyrics_for_local_files_row(cx).element,
             Slot::Discord => self.discord_row(cx).element,
             Slot::DiscordName => self.discord_name_row(cx).element,
@@ -3049,28 +3043,6 @@ impl SettingsView {
         self.row(
             t!("settings-romanized-lyrics"),
             t!("settings-romanized-lyrics-detail"),
-            muted,
-            small,
-            action.into_any_element(),
-        )
-    }
-
-    fn translated_lyrics_row(&self, cx: &mut Context<Self>) -> Setting {
-        let theme = *cx.theme();
-        let muted = theme.muted_foreground;
-        let small = theme.text(Text::Small);
-        let settings = self.settings.read(cx);
-        let on = settings.translated_lyrics();
-        let action =
-            Switch::new("translated-lyrics", on).on_click(cx.listener(move |this, _, _, cx| {
-                this.settings.update(cx, |settings, cx| {
-                    settings.set_translated_lyrics(!on, cx);
-                });
-            }));
-
-        self.row(
-            t!("settings-translated-lyrics"),
-            t!("settings-translated-lyrics-detail"),
             muted,
             small,
             action.into_any_element(),
