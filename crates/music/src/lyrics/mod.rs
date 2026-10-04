@@ -149,7 +149,14 @@ pub(crate) fn could_be(query: &LyricsQuery, title: &str, artist: &str, seconds: 
     ) {
         (true, true) => true,
         (true, false) => scripts_differ(title, &query.title) && close(CLOSE_ENOUGH),
-        (false, true) => scripts_differ(artist, &query.artist) && close(CLOSE_ENOUGH),
+        // the title names the track but the credits cannot be compared, so the credits have to at
+        // least read like the ones asked for: a cover by someone whose name happens to be written
+        // in Latin letters would otherwise answer for a song its singer never recorded
+        (false, true) => {
+            scripts_differ(artist, &query.artist)
+                && close(CLOSE_ENOUGH)
+                && reading_similarity(artist, &query.artist) >= READING_LEAST
+        }
         (false, false) => {
             scripts_differ(title, &query.title)
                 && scripts_differ(artist, &query.artist)
