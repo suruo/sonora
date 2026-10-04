@@ -20,12 +20,15 @@ pub const KUGOU: &str = "Kugou";
 
 const CLOSE_ENOUGH: u64 = 3;
 const WAY_OFF: u64 = 10;
+/// What a sheet that runs to the track's own length is worth, and what every second it misses that
+/// length by costs it, down to nothing at the length nothing more can be told from.
+const LENGTH: u32 = 100;
+const LENGTH_STEP: u32 = 10;
 const TITLE: u32 = 40;
 const ARTIST: u32 = 30;
 const ALBUM: u32 = 15;
 const SYNCED: u32 = 200;
 const WORDED: u32 = 400;
-const DRIFTED: u32 = 50;
 const TRUNCATED: u32 = 500;
 const TRUSTED: u32 = 25;
 /// What a sheet is worth over an otherwise identical one for having come with a track
@@ -68,7 +71,7 @@ pub fn rank(query: &LyricsQuery, hits: Vec<LyricsHit>) -> Vec<LyricsHit> {
 /// it. A remix, a live take or an instrumental is another recording whose words may differ, so
 /// its sheet answers only for the tracks nothing better names.
 fn names_the_track(claimed: &str, wanted: &str) -> bool {
-    title_similarity(claimed, wanted) == 1.
+    title_letters(claimed, wanted) == 1.
 }
 
 pub fn reshape(hits: &mut [LyricsHit]) {
@@ -238,31 +241,28 @@ fn readings(text: &str) -> Vec<Vec<char>> {
 
 pub fn score(query: &LyricsQuery, hit: &LyricsHit) -> i64 {
     let mut score: i64 = i64::from(hit.trust);
-    if let Some(duration) = hit.duration {
+    if let Some(duration) = hit.duration
+        && !query.duration.is_zero()
+    {
         let drift = duration.as_secs().abs_diff(query.duration.as_secs());
-        if drift <= CLOSE_ENOUGH {
-            score += i64::from(100 - (drift as u32) * 10);
-        } else if drift > WAY_OFF {
-            score -= i64::from(DRIFTED);
-        }
+        score += i64::from(LENGTH) - i64::from(drift.min(WAY_OFF) as u32) * i64::from(LENGTH_STEP);
     }
-    if alike(&hit.title, &query.title) {
-        score += (f64::from(TITLE) * f64::from(title_similarity(&hit.title, &query.title))).round()
-            as i64;
-    } else if scripts_differ(&hit.title, &query.title) {
-        // the two services write the name in different scripts, so what one of them reads as is
-        // all the two have in common
-        score += (f64::from(TITLE) * f64::from(reading_similarity(&hit.title, &query.title)))
-            .round() as i64;
+    if comparable(&hit.title, &query.title) {
+        score += (f64::from(TITLE)
+            * f64::from(name_similarity(&hit.title, &query.title, title_letters)))
+        .round() as i64;
     }
-    if artists_alike(&hit.artist, &query.artist) {
-        score += i64::from(ARTIST);
+    if comparable(&hit.artist, &query.artist) {
+        score += (f64::from(ARTIST)
+            * f64::from(name_similarity(&hit.artist, &query.artist, artist_letters)))
+        .round() as i64;
     }
     if let Some(album) = &query.album
         && let Some(named) = &hit.album
-        && alike(named, album)
+        && comparable(named, album)
     {
-        score += i64::from(ALBUM);
+        score += (f64::from(ALBUM) * f64::from(name_similarity(named, album, title_letters)))
+            .round() as i64;
     }
     if hit.lyrics.synced() {
         score += i64::from(SYNCED);
@@ -295,7 +295,31 @@ fn spelled(text: &str) -> Vec<char> {
 /// remix, a live take or an instrumental carries less of the track than one that names it the way
 /// the track names itself, while a track whose own title carries its album's decoration is not
 /// held against a sheet that leaves that out.
-fn title_similarity(claimed: &str, wanted: &str) -> f32 {
+/// Whether two names could be one name written two ways, so that weighing how much of one the other
+/// carries means anything: the same name, or two names written in different scripts, where only the
+/// reading can tell. Two names in different non-Latin scripts cannot be, and are weighed by length
+/// alone elsewhere.
+fn comparable(left: &str, right: &str) -> bool {
+    alike(left, right) || scripts_differ(left, right)
+}
+
+/// How much of one name another carries, from nothing to all of it: what the two have in common in
+/// the letters they are written with, and what they have in common in the way they read — the only
+/// thing left to go on when the same name is written in another script or another character set —
+/// whichever of the two says more. The names are read as they stand, decorations and all, because
+/// what a version calls itself is exactly what tells it from the track it is a version of.
+/// `by_letters` is how the letters are weighed, which is not the same for every field: a title is a
+/// run of words and a credit is a list of names.
+fn name_similarity(claimed: &str, wanted: &str, by_letters: fn(&str, &str) -> f32) -> f32 {
+    let (claimed, wanted) = (claimed.trim(), wanted.trim());
+    if claimed.is_empty() || wanted.is_empty() {
+        return 0.;
+    }
+    by_letters(claimed, wanted).max(reading_similarity(claimed, wanted))
+}
+
+/// A title weighed by the words it adds to another.
+fn title_letters(claimed: &str, wanted: &str) -> f32 {
     let claimed = spelled(claimed);
     if claimed.is_empty() {
         return 0.;
@@ -315,6 +339,29 @@ fn title_similarity(claimed: &str, wanted: &str) -> f32 {
             _ => true,
         })
         .count();
+    1. - added as f32 / claimed.len() as f32
+}
+
+/// How much of the track's own artist line a sheet's artist line carries, from none of it to all
+/// of it. It reads the line as the names it is made of, and as with the title counts what the
+/// sheet adds: one that credits a remixer or a guest alongside the track's own artists carries
+/// less of the track than one that credits them alone, while a sheet that leaves one of several
+/// artists out is not held against it.
+/// A credit weighed by the names it adds to another: a sheet that credits a remixer or a guest
+/// alongside the track's own artists carries less of the track than one that credits them alone.
+fn artist_letters(claimed: &str, wanted: &str) -> f32 {
+    let claimed: Vec<String> = artist_names(claimed)
+        .map(undecorated)
+        .filter(|name| !name.is_empty())
+        .collect();
+    if claimed.is_empty() {
+        return 0.;
+    }
+    let wanted: Vec<String> = artist_names(wanted)
+        .map(undecorated)
+        .filter(|name| !name.is_empty())
+        .collect();
+    let added = claimed.iter().filter(|name| !wanted.contains(name)).count();
     1. - added as f32 / claimed.len() as f32
 }
 
@@ -431,7 +478,7 @@ pub(crate) fn artists_alike(left: &str, right: &str) -> bool {
 
 fn artist_names(artists: &str) -> impl Iterator<Item = &str> {
     artists
-        .split([',', '&', ';'])
+        .split(['、', ',', '，', '&', ';'])
         .map(str::trim)
         .filter(|artist| !artist.is_empty())
 }
