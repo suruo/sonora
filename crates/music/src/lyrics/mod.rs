@@ -285,6 +285,7 @@ mod tests {
             end: Some(Duration::from_secs(end)),
             text: text.to_owned(),
             romanized: None,
+            translated: None,
             words: None,
             secondary: Vec::new(),
             voice: Voice::Lead,

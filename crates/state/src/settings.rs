@@ -296,6 +296,7 @@ struct Values {
     karaoke_lyrics: bool,
     blur_lyrics: bool,
     romanized_lyrics: bool,
+    translated_lyrics: bool,
     panel_lyrics_scale: f32,
     fullscreen_lyrics_scale: f32,
     romanization_scripts: RomanizationScripts,
@@ -450,6 +451,7 @@ impl Default for Values {
             karaoke_lyrics: true,
             blur_lyrics: true,
             romanized_lyrics: true,
+            translated_lyrics: true,
             panel_lyrics_scale: DEFAULT_LYRICS_SCALE,
             fullscreen_lyrics_scale: DEFAULT_LYRICS_SCALE,
             romanization_scripts: RomanizationScripts::default(),
@@ -809,6 +811,10 @@ impl AppSettings {
 
     pub fn romanized_lyrics(&self) -> bool {
         self.values.romanized_lyrics
+    }
+
+    pub fn translated_lyrics(&self) -> bool {
+        self.values.translated_lyrics
     }
 
     pub fn panel_lyrics_scale(&self) -> f32 {
@@ -1209,6 +1215,11 @@ impl AppSettings {
 
     pub fn set_romanized_lyrics(&mut self, romanized: bool, cx: &mut Context<Self>) {
         self.values.romanized_lyrics = romanized;
+        self.schedule_save(cx);
+    }
+
+    pub fn set_translated_lyrics(&mut self, translated: bool, cx: &mut Context<Self>) {
+        self.values.translated_lyrics = translated;
         self.schedule_save(cx);
     }
 

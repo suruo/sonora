@@ -968,13 +968,14 @@ impl Aside {
             .map(|hit| (hit.source, hit.writers.clone()));
         let following = lyrics.following().map(str::to_owned);
         let take = lyrics.revision();
-        let (karaoke_lyrics, romanization_scripts) = {
+        let (karaoke_lyrics, romanization_scripts, translated_lyrics) = {
             let settings = self.settings.read(cx);
             (
                 settings.karaoke_lyrics(),
                 settings
                     .romanized_lyrics()
                     .then(|| settings.romanization_scripts()),
+                settings.translated_lyrics(),
             )
         };
         let karaoke_effects = karaoke_lyrics && effects();
@@ -1271,6 +1272,10 @@ impl Aside {
                             .child(SharedString::from(line.text.clone()))
                             .into_any_element(),
                     };
+                    let translated_line = match translated_lyrics {
+                        true => line.translated.clone(),
+                        false => None,
+                    };
                     let fade = match (line.secondary.is_empty(), active, departing) {
                         (true, _, _) => None,
                         (_, true, _) => Some(("lane-in", self.arrival, growing)),
@@ -1338,8 +1343,11 @@ impl Aside {
                         .child(primary)
                         .when_some(
                             selected_romanization(&line.romanized, romanization_scripts),
-                            |this, text| this.child(romanized_lyrics_lane(text, lane_size, &theme)),
+                            |this, text| this.child(muted_lyrics_lane(text, lane_size, &theme)),
                         )
+                        .when_some(translated_line, |this, text| {
+                            this.child(muted_lyrics_lane(text, lane_size, &theme))
+                        })
                         .children(lanes)
                         .when(depth > 0., |this| {
                             this.layer_scale(1. - (1. - PRESSED) * depth)
@@ -1431,7 +1439,7 @@ impl Aside {
                         .child(SharedString::from(text.clone()))
                         .when_some(
                             selected_romanization(romanized, romanization_scripts),
-                            |this, text| this.child(romanized_lyrics_lane(text, lane_size, &theme)),
+                            |this, text| this.child(muted_lyrics_lane(text, lane_size, &theme)),
                         )
                         .into_any_element(),
                 ],
@@ -2109,7 +2117,7 @@ fn secondary_lyrics_lane(
         .child(lyrics)
         .when_some(
             selected_romanization(&lane.romanized, sung.scripts),
-            |this, text| this.child(romanized_lyrics_lane(text, size, theme)),
+            |this, text| this.child(muted_lyrics_lane(text, size, theme)),
         )
         .into_any_element()
 }
@@ -2136,7 +2144,9 @@ fn selected_romanization(
         .then(|| romanized.text.clone())
 }
 
-fn romanized_lyrics_lane(text: String, size: Pixels, theme: &ui::Theme) -> Div {
+/// A line drawn under the words it belongs to: a pronunciation or a translation, in the panel's
+/// muted tone and at the size the rest of the verse uses.
+fn muted_lyrics_lane(text: String, size: Pixels, theme: &ui::Theme) -> Div {
     div()
         .text_size(size)
         .text_color(theme.muted_foreground)
@@ -2918,6 +2928,7 @@ mod tests {
                 end: Some(Duration::from_secs(5)),
                 text: "first".to_owned(),
                 romanized: None,
+                translated: None,
                 words: None,
                 secondary: Vec::new(),
                 voice: Voice::Lead,
@@ -2927,6 +2938,7 @@ mod tests {
                 end: Some(Duration::from_secs(15)),
                 text: "second".to_owned(),
                 romanized: None,
+                translated: None,
                 words: None,
                 secondary: Vec::new(),
                 voice: Voice::Lead,
@@ -2948,6 +2960,7 @@ mod tests {
                 end: Some(Duration::from_secs(12)),
                 text: "first".to_owned(),
                 romanized: None,
+                translated: None,
                 words: Some(vec![LyricsWord {
                     start: Duration::from_secs(2),
                     end: Duration::from_secs(5),
@@ -2961,6 +2974,7 @@ mod tests {
                 end: Some(Duration::from_secs(15)),
                 text: "second".to_owned(),
                 romanized: None,
+                translated: None,
                 words: None,
                 secondary: Vec::new(),
                 voice: Voice::Lead,
@@ -3126,6 +3140,7 @@ mod tests {
             end: Some(Duration::from_secs(8)),
             text: "Wake me up inside".to_owned(),
             romanized: None,
+            translated: None,
             words: Some(vec![LyricsWord {
                 start: Duration::from_secs(2),
                 end: Duration::from_secs(8),
@@ -3164,6 +3179,7 @@ mod tests {
             end: Some(Duration::from_secs(5)),
             text: "line".to_owned(),
             romanized: None,
+            translated: None,
             words: Some(vec![LyricsWord {
                 start: Duration::from_secs(2),
                 end: Duration::from_secs(5),
@@ -3183,6 +3199,7 @@ mod tests {
             end: Some(Duration::from_secs(8)),
             text: "Wake me up inside".to_owned(),
             romanized: None,
+            translated: None,
             words: Some(vec![LyricsWord {
                 start: Duration::from_secs(2),
                 end: Duration::from_secs(8),
@@ -3218,6 +3235,7 @@ mod tests {
             end: Some(Duration::from_secs(8)),
             text: "Wake me up inside".to_owned(),
             romanized: None,
+            translated: None,
             words: Some(vec![LyricsWord {
                 start: Duration::from_secs(2),
                 end: Duration::from_secs(8),
@@ -3256,6 +3274,7 @@ mod tests {
             end: Some(Duration::from_secs(5)),
             text: "line".to_owned(),
             romanized: None,
+            translated: None,
             words: None,
             secondary: Vec::new(),
             voice: Voice::Lead,

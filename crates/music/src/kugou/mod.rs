@@ -20,6 +20,9 @@ const DOWNLOAD: &str = "https://lyrics.kugou.com/download";
 const SONGS: usize = 4;
 const PAGE: usize = 20;
 const SHEETS: usize = 2;
+/// The kind the site files a translation under in a sheet's language track. The one it files
+/// under `0` is a pronunciation, which Sonora romanizes itself.
+const TRANSLATION: u8 = 1;
 const CIPHER: [u8; 16] = [
     0x40, 0x47, 0x61, 0x77, 0x5e, 0x32, 0x74, 0x47, 0x51, 0x36, 0x31, 0x2d, 0xce, 0xd2, 0x6e, 0x69,
 ];
@@ -169,6 +172,23 @@ struct Download {
     content: Option<String>,
 }
 
+/// The json a sheet's `[language:…]` header holds.
+#[derive(Deserialize)]
+struct Language {
+    #[serde(default)]
+    content: Vec<LanguageTrack>,
+}
+
+/// One track of a language header: the kind of help it holds, and the line it holds for each of
+/// the sheet's timed lines, split into the pieces the site timed.
+#[derive(Deserialize)]
+struct LanguageTrack {
+    #[serde(default, rename = "lyricContent")]
+    lines: Vec<Vec<String>>,
+    #[serde(default, rename = "type")]
+    kind: u8,
+}
+
 #[async_trait]
 impl LyricsProvider for Kugou {
     fn name(&self) -> &'static str {
@@ -255,7 +275,7 @@ fn decode(content: &str) -> Result<String> {
 }
 
 fn hit(song: &Song, krc: &str, title: &str) -> Option<LyricsHit> {
-    let mut lines = parse(krc);
+    let mut lines = parse(krc, &translations(krc));
     let artists: Vec<String> = song
         .singer
         .split(['、', ',', '&'])
@@ -290,8 +310,38 @@ fn hit(song: &Song, krc: &str, title: &str) -> Option<LyricsHit> {
     })
 }
 
-fn parse(krc: &str) -> Vec<LyricsLine> {
-    krc.lines().filter_map(read).collect()
+/// The sheet's timed lines, each carrying the translation the sheet's own language track holds
+/// at the same position. That track counts every timed line, including the ones [`read`] drops
+/// for holding no words, so the two stay in step.
+fn parse(krc: &str, translated: &[String]) -> Vec<LyricsLine> {
+    let mut seen = 0usize;
+    let mut lines = Vec::new();
+    for line in krc.lines() {
+        if !timed(line) {
+            continue;
+        }
+        let index = seen;
+        seen += 1;
+        let Some(mut lyrics) = read(line) else {
+            continue;
+        };
+        lyrics.translated = translated
+            .get(index)
+            .map(|text| text.trim())
+            .filter(|text| !text.is_empty())
+            .map(str::to_owned);
+        lines.push(lyrics);
+    }
+    lines
+}
+
+/// Whether a line is one of the sheet's timed lines. Its header block and its language track
+/// are not.
+fn timed(line: &str) -> bool {
+    line.strip_prefix('[')
+        .and_then(|rest| rest.split_once(']'))
+        .and_then(|(header, _)| pair_of(header))
+        .is_some()
 }
 
 fn read(line: &str) -> Option<LyricsLine> {
@@ -332,6 +382,7 @@ fn read(line: &str) -> Option<LyricsLine> {
         words: (!words.is_empty()).then_some(words),
         text,
         romanized: None,
+        translated: None,
         secondary: Vec::new(),
         voice: Voice::Lead,
     })
@@ -350,4 +401,37 @@ fn stamp_of(stamp: &str) -> Option<(Duration, Duration)> {
     let at = parts.next()?.trim().parse().ok()?;
     let length = parts.next()?.trim().parse().ok()?;
     Some((Duration::from_millis(at), Duration::from_millis(length)))
+}
+
+/// The translation a sheet carries, one line for each of its timed lines. The site hands it over
+/// as base64 json in the sheet's own `[language:…]` header, beside a pronunciation under another
+/// kind; only the translation is read, and a sheet without one answers nothing.
+fn translations(krc: &str) -> Vec<String> {
+    let Some(payload) = krc
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("[language:"))
+        .and_then(|payload| payload.strip_suffix(']'))
+        .and_then(base64)
+    else {
+        return Vec::new();
+    };
+    let Ok(language) = serde_json::from_slice::<Language>(&payload) else {
+        log::debug!("lyrics: cannot read the kugou language track");
+        return Vec::new();
+    };
+    language
+        .content
+        .into_iter()
+        .find(|track| track.kind == TRANSLATION)
+        .map(|track| track.lines.into_iter().map(|line| line.concat()).collect())
+        .unwrap_or_default()
+}
+
+/// The bytes a base64 payload stands for. The site leaves its padding off, so it is put back.
+fn base64(payload: &str) -> Option<Vec<u8>> {
+    let mut padded = payload.trim().to_owned();
+    while !padded.len().is_multiple_of(4) {
+        padded.push('=');
+    }
+    STANDARD.decode(padded).ok()
 }

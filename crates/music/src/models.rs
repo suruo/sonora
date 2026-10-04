@@ -340,6 +340,11 @@ pub struct LyricsLine {
     pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub romanized: Option<RomanizedText>,
+    /// What the line says in another language, when the service that supplied the lyrics
+    /// supplied a translation too. Sonora never translates anything itself, so a service that
+    /// ships none leaves this `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub translated: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub words: Option<Vec<LyricsWord>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

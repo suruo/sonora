@@ -753,6 +753,7 @@ mod tests {
                     end: Some(Duration::from_secs(1)),
                     text: "line".to_owned(),
                     romanized: None,
+                    translated: None,
                     words: Some(vec![LyricsWord {
                         start: Duration::ZERO,
                         end: Duration::from_secs(1),

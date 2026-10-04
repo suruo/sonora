@@ -44,7 +44,7 @@ impl NetEase {
             .query(&[("id", id.to_string().as_str()), ("cp", "false")])
             .query(&[
                 ("lv", "0"),
-                ("tv", "0"),
+                ("tv", "1"),
                 ("rv", "0"),
                 ("kv", "0"),
                 ("yv", "0"),
@@ -104,6 +104,8 @@ struct Named {
 struct Sheet {
     lrc: Option<Verse>,
     yrc: Option<Verse>,
+    /// The translation, which the site hands over as a sheet of its own, timed like the lyric.
+    tlyric: Option<Verse>,
     #[serde(default, rename = "pureMusic")]
     pure_music: bool,
 }
@@ -218,6 +220,7 @@ fn sheet_hit(named: &LyricsQuery, sheet: &Sheet, trust: u32) -> Option<LyricsHit
             if !crate::lyrics::sheet::headed(&mut lines, &named.title, &artists) {
                 return None;
             }
+            add_translations(&mut lines, &sheet.tlyric);
             Lyrics::Synced {
                 lines: lines.into(),
             }
@@ -305,6 +308,55 @@ fn parse_yrc(yrc: &str) -> Vec<LyricsLine> {
     lines
 }
 
+/// Gives each line the translation written at its own time. The site times its translation the
+/// way it times the lyric, so the two sheets are paired by their stamps rather than by their
+/// order, and a line the translation does not name keeps its own words alone.
+fn add_translations(lines: &mut [LyricsLine], tlyric: &Option<Verse>) {
+    let Some(text) = tlyric.as_ref().and_then(|verse| verse.lyric.as_deref()) else {
+        return;
+    };
+    if text.trim().is_empty() {
+        return;
+    }
+    let translated = translation_lines(text);
+    for line in lines {
+        if let Some((_, words)) = translated
+            .iter()
+            .find(|(at, _)| at.as_millis() == line.start.as_millis())
+        {
+            line.translated = Some(words.clone());
+        }
+    }
+}
+
+/// A translation sheet as the time and the words of each of its lines. A stamp that names no
+/// words, and the sheet's own offset tag, are left out the way a lyric sheet's are.
+fn translation_lines(text: &str) -> Vec<(Duration, String)> {
+    let mut found = Vec::new();
+    for line in text.lines() {
+        let mut rest = line.trim_start();
+        let mut stamps = Vec::new();
+        while let Some(tail) = rest.strip_prefix('[') {
+            let Some((stamp, after)) = tail.split_once(']') else {
+                break;
+            };
+            let Some(at) = lrc::stamp_of(stamp) else {
+                break;
+            };
+            stamps.push(at);
+            rest = after.trim_start();
+        }
+        let words = rest.trim();
+        if words.is_empty() {
+            continue;
+        }
+        for at in stamps {
+            found.push((at, words.to_owned()));
+        }
+    }
+    found
+}
+
 fn read_yrc(line: &str) -> Option<LyricsLine> {
     let (header, rest) = line.strip_prefix('[')?.split_once(']')?;
     let (start, span) = pair_of(header)?;
@@ -346,6 +398,7 @@ fn read_yrc(line: &str) -> Option<LyricsLine> {
         words: (!words.is_empty()).then_some(words),
         text,
         romanized: None,
+        translated: None,
         secondary: Vec::new(),
         voice: Voice::Lead,
     })

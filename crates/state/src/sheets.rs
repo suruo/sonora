@@ -9,7 +9,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use music::{Lyrics as Sheet, LyricsHit};
 use serde::{Deserialize, Serialize};
 
-const VERSION: u32 = 3;
+/// The shape of a stored sheet. A sheet stored by an older version is ignored rather than
+/// migrated, so a change to what a hit holds has to raise this.
+const VERSION: u32 = 4;
 const PASSING: bool = cfg!(debug_assertions);
 const CAPACITY: usize = 500;
 
