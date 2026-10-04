@@ -6,7 +6,7 @@ mod shape;
 pub(crate) mod sheet;
 pub(crate) mod ttml;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use crate::{Lyrics, LyricsHit, LyricsLine, LyricsQuery, LyricsWord};
@@ -109,7 +109,8 @@ pub fn score(query: &LyricsQuery, hit: &LyricsHit) -> i64 {
         }
     }
     if alike(&hit.title, &query.title) {
-        score += i64::from(TITLE);
+        score += (f64::from(TITLE) * f64::from(title_similarity(&hit.title, &query.title))).round()
+            as i64;
     }
     if artists_alike(&hit.artist, &query.artist) {
         score += i64::from(ARTIST);
@@ -133,6 +134,45 @@ pub fn score(query: &LyricsQuery, hit: &LyricsHit) -> i64 {
         score -= i64::from(TRUNCATED);
     }
     score
+}
+
+/// A title as the words it is read by: letters, digits and the bracketed words a different
+/// version of the same song is named by, lowercased, with the punctuation and spacing between
+/// them dropped. The brackets are kept here, where matching drops them, because what a version
+/// calls itself is exactly what tells two recordings of one song apart.
+fn spelled(text: &str) -> Vec<char> {
+    text.chars()
+        .filter(|letter| letter.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+/// How much of the track's own title a sheet's title carries, from none of it to all of it. What
+/// it measures is what the sheet adds to the words the two share: a sheet that calls them a
+/// remix, a live take or an instrumental carries less of the track than one that names it the way
+/// the track names itself, while a track whose own title carries its album's decoration is not
+/// held against a sheet that leaves that out.
+fn title_similarity(claimed: &str, wanted: &str) -> f32 {
+    let claimed = spelled(claimed);
+    if claimed.is_empty() {
+        return 0.;
+    }
+
+    let mut spare: HashMap<char, usize> = HashMap::new();
+    for letter in spelled(wanted) {
+        *spare.entry(letter).or_default() += 1;
+    }
+    let added = claimed
+        .iter()
+        .filter(|letter| match spare.get_mut(letter) {
+            Some(left) if *left > 0 => {
+                *left -= 1;
+                false
+            }
+            _ => true,
+        })
+        .count();
+    1. - added as f32 / claimed.len() as f32
 }
 
 fn truncated(lyrics: &Lyrics, duration: Duration) -> bool {
