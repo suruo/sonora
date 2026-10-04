@@ -2903,16 +2903,7 @@ impl SettingsView {
     fn lyrics_providers_row(&self, cx: &mut Context<Self>) -> Setting {
         let theme = *cx.theme();
         let settings = self.settings.read(cx);
-        let providers = [
-            (music::lyrics::LOCAL, "settings-lyrics-provider-local"),
-            ("Spotify", "settings-lyrics-provider-spotify"),
-            ("YouTube Music", "settings-lyrics-provider-youtube"),
-            ("Apple Music", "settings-lyrics-provider-apple-music"),
-            ("Musixmatch", "settings-lyrics-provider-musixmatch"),
-            ("LrcLib", "settings-lyrics-provider-lrclib"),
-            ("Kugou", "settings-lyrics-provider-kugou"),
-            ("NetEase", "settings-lyrics-provider-netease"),
-        ];
+        let providers = lyrics_providers();
         let count = providers
             .iter()
             .filter(|(provider, _)| settings.lyrics_provider_enabled(provider))
@@ -2923,8 +2914,9 @@ impl SettingsView {
             t!("settings-lyrics-providers-selected", count = count),
         )
         .sticky()
-        .items(providers.map(|(provider, label)| {
-            MenuItem::new(label, i18n::lookup(label, None))
+        .items(providers.iter().map(|(provider, label)| {
+            let provider = *provider;
+            MenuItem::new(*label, i18n::lookup(label, None))
                 .selected(settings.lyrics_provider_enabled(provider))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.settings.update(cx, |settings, cx| {
@@ -4147,6 +4139,21 @@ impl SettingsView {
                     .update(cx, |session, cx| session.cancel_sign_in(cx));
             }))
     }
+}
+
+/// Every lyrics source the app can ask, in the order they are listed, with the key each name is
+/// drawn by.
+fn lyrics_providers() -> &'static [(&'static str, &'static str)] {
+    &[
+        (music::lyrics::LOCAL, "settings-lyrics-provider-local"),
+        ("Spotify", "settings-lyrics-provider-spotify"),
+        ("YouTube Music", "settings-lyrics-provider-youtube"),
+        ("Apple Music", "settings-lyrics-provider-apple-music"),
+        ("Musixmatch", "settings-lyrics-provider-musixmatch"),
+        ("LrcLib", "settings-lyrics-provider-lrclib"),
+        ("Kugou", "settings-lyrics-provider-kugou"),
+        ("NetEase", "settings-lyrics-provider-netease"),
+    ]
 }
 
 fn romanization_script_copy(writing_system: WritingSystem) -> (&'static str, &'static str) {
