@@ -192,13 +192,14 @@ impl LyricsProvider for Kugou {
     }
 
     async fn search(&self, query: &LyricsQuery) -> Result<Vec<LyricsHit>> {
+        // The site is asked by name, and by the artist alone when that finds nothing that could be
+        // the recording: a service that romanizes its titles calls a Japanese song by its reading,
+        // which names nothing the site holds it under.
         let wanted = format!("{} {}", query.artist, query.title);
-        let songs = shortlist(
-            self.songs(&wanted).await?,
-            &query.title,
-            &query.artist,
-            query.duration,
-        );
+        let mut songs = shortlist(self.songs(&wanted).await?, query);
+        if songs.is_empty() {
+            songs = shortlist(self.songs(&query.artist).await?, query);
+        }
 
         let mut tasks = JoinSet::new();
         for song in songs {
@@ -242,18 +243,15 @@ impl LyricsProvider for Kugou {
 /// length first. The site answers a name search with its own idea of what fits, which includes
 /// other songs by the same artist and covers by other people, and every one of those left in would
 /// take the place of a song that could actually be the one being played.
-fn shortlist(songs: Vec<Song>, title: &str, artist: &str, duration: Duration) -> Vec<Song> {
+fn shortlist(songs: Vec<Song>, query: &LyricsQuery) -> Vec<Song> {
     let mut songs: Vec<Song> = songs
         .into_iter()
-        .filter(|song| {
-            crate::lyrics::alike(&song.name, title)
-                && crate::lyrics::artists_alike(&song.singer, artist)
-        })
+        .filter(|song| crate::lyrics::could_be(query, &song.name, &song.singer, song.duration))
         .collect();
     songs.sort_by_key(|song| {
         Duration::from_secs(song.duration)
             .as_secs()
-            .abs_diff(duration.as_secs())
+            .abs_diff(query.duration.as_secs())
     });
     songs.truncate(SONGS);
     songs

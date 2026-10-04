@@ -108,12 +108,46 @@ pub fn instrumental(query: &LyricsQuery, hits: &[LyricsHit]) -> bool {
 }
 
 fn matched(query: &LyricsQuery, hit: &LyricsHit) -> bool {
-    if !alike(&hit.title, &query.title) || !artists_alike(&hit.artist, &query.artist) {
-        return false;
-    }
-    hit.duration.is_none_or(|duration| {
-        query.duration.is_zero() || duration.as_secs().abs_diff(query.duration.as_secs()) <= WAY_OFF
-    })
+    let could = match hit.duration {
+        Some(duration) => could_be(query, &hit.title, &hit.artist, duration.as_secs()),
+        // a sheet that brings no length of its own can only answer by its title
+        None => alike(&hit.title, &query.title) && artists_alike(&hit.artist, &query.artist),
+    };
+    could
+        && hit.duration.is_none_or(|duration| {
+            query.duration.is_zero()
+                || duration.as_secs().abs_diff(query.duration.as_secs()) <= WAY_OFF
+        })
+}
+
+/// Whether a song a service lists could be the recording being played. Its credits have to name
+/// the artist's, and either its title names the track or — when the two titles are written in
+/// different scripts, so that neither can name the other — its length agrees to the second. That
+/// last part is what catches a service that romanizes its titles: it calls a Japanese song by its
+/// reading, which shares no character with the name the Chinese services file it under, so its own
+/// title is no help at all. A sheet that names the track still scores its title and so comes first;
+/// this only lets the others in.
+pub(crate) fn could_be(query: &LyricsQuery, title: &str, artist: &str, seconds: u64) -> bool {
+    artists_alike(artist, &query.artist)
+        && (alike(title, &query.title)
+            || (scripts_differ(title, &query.title)
+                && !query.duration.is_zero()
+                && seconds.abs_diff(query.duration.as_secs()) <= CLOSE_ENOUGH))
+}
+
+/// Whether a title is written in Latin letters and no others.
+fn written_in_latin(text: &str) -> bool {
+    let mut letters = text
+        .chars()
+        .filter(|letter| letter.is_alphanumeric())
+        .peekable();
+    letters.peek().is_some_and(|first| first.is_ascii()) && letters.all(|letter| letter.is_ascii())
+}
+
+/// Whether two titles are written in different scripts, one in Latin letters and the other in
+/// something else. Only then can neither name the other, whatever they say.
+fn scripts_differ(left: &str, right: &str) -> bool {
+    written_in_latin(left) != written_in_latin(right)
 }
 
 pub fn score(query: &LyricsQuery, hit: &LyricsHit) -> i64 {
@@ -491,6 +525,23 @@ mod tests {
 
         assert_eq!(ranked.len(), 1);
         assert_eq!(ranked[0].title, "Versailles");
+    }
+
+    #[test]
+    fn a_song_filed_under_another_script_is_taken_by_its_length() {
+        let query = LyricsQuery {
+            title: "Uchiagehanabi".to_owned(),
+            artist: "DAOKO".to_owned(),
+            album: None,
+            duration: Duration::from_secs(289),
+            track: None,
+        };
+
+        // the same recording, which the site files under its own name: no title of one can name
+        // the other, so the credits and the length are all there is to go on
+        let ranked = rank(&query, vec![hit("打上花火", "DAOKO", 289, true)]);
+
+        assert_eq!(ranked.len(), 1);
     }
 
     #[test]

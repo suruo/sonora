@@ -20,6 +20,10 @@ const GUESSED: u32 = 0;
 const SEARCH: &str = "https://music.163.com/api/search/get";
 const LYRIC: &str = "https://music.163.com/api/song/lyric/v1";
 const CANDIDATES: usize = 3;
+/// How many songs a name search may answer with, and how many the artist-alone fallback may, which
+/// has to reach further down a popular artist's list to find the one asked for.
+const HITS: usize = 5;
+const NAMED: usize = 20;
 /// How far a side sheet's time may sit from the line it belongs to and still be taken for it, in
 /// milliseconds. Wide enough for the tens the site's own two timelines differ by, narrow enough
 /// that a line never takes its neighbour's words.
@@ -43,6 +47,28 @@ impl NetEase {
         Self {
             http: reqwest::Client::new(),
         }
+    }
+
+    /// One name search, answered with the songs the site lists for it.
+    async fn search_songs(&self, wanted: &str, limit: usize) -> Result<Vec<Song>> {
+        let response = self
+            .http
+            .get(SEARCH)
+            .query(&[("s", wanted), ("type", "1"), ("limit", &limit.to_string())])
+            .header("User-Agent", AGENT)
+            .header("Referer", "https://music.163.com")
+            .send()
+            .await
+            .context("cannot reach netease")?;
+        let status = response.status();
+        if !status.is_success() {
+            anyhow::bail!("netease answered with status {status}");
+        }
+        let answer: SearchAnswer = response
+            .json()
+            .await
+            .context("cannot read the netease search response")?;
+        Ok(answer.result.map(|result| result.songs).unwrap_or_default())
     }
 
     async fn lyric(&self, id: u64) -> Result<Sheet> {
@@ -139,28 +165,17 @@ impl LyricsProvider for NetEase {
             return Ok(sheet_hit(query, &sheet, EXACT).into_iter().collect());
         }
 
+        // The site is asked by name, and by the artist alone when that finds nothing that could be
+        // the recording: a service that romanizes its titles calls a Japanese song by its reading,
+        // which names nothing the site holds it under.
         let wanted = format!("{} {}", query.title, query.artist);
-        let response = self
-            .http
-            .get(SEARCH)
-            .query(&[("s", wanted.as_str()), ("type", "1"), ("limit", "5")])
-            .header("User-Agent", AGENT)
-            .header("Referer", "https://music.163.com")
-            .send()
-            .await
-            .context("cannot reach netease")?;
-        let status = response.status();
-        if !status.is_success() {
-            anyhow::bail!("netease answered with status {status}");
+        let mut songs = shortlist(self.search_songs(&wanted, HITS).await?, query);
+        if songs.is_empty() {
+            songs = shortlist(self.search_songs(&query.artist, NAMED).await?, query);
         }
-        let answer: SearchAnswer = response
-            .json()
-            .await
-            .context("cannot read the netease search response")?;
-        let songs = answer.result.map(|result| result.songs).unwrap_or_default();
 
         let mut tasks = JoinSet::new();
-        for song in shortlist(songs, &query.title, &query.artist, query.duration) {
+        for song in songs {
             let netease = Self {
                 http: self.http.clone(),
             };
@@ -187,7 +202,7 @@ impl LyricsProvider for NetEase {
 /// The songs worth fetching sheets for: those that could be the recording being played, nearest in
 /// length first. A name search answers with records by other people and other songs of the same
 /// artist too, and one of those left in would take the place of a song that could be the one.
-fn shortlist(songs: Vec<Song>, title: &str, artist: &str, duration: Duration) -> Vec<Song> {
+fn shortlist(songs: Vec<Song>, query: &LyricsQuery) -> Vec<Song> {
     let mut songs: Vec<Song> = songs
         .into_iter()
         .filter(|song| {
@@ -197,14 +212,13 @@ fn shortlist(songs: Vec<Song>, title: &str, artist: &str, duration: Duration) ->
                 .filter_map(|artist| artist.name.clone())
                 .collect::<Vec<_>>()
                 .join(", ");
-            crate::lyrics::alike(&song.name, title)
-                && crate::lyrics::artists_alike(&artists, artist)
+            crate::lyrics::could_be(query, &song.name, &artists, song.duration / 1_000)
         })
         .collect();
     songs.sort_by_key(|song| {
         Duration::from_millis(song.duration)
             .as_secs()
-            .abs_diff(duration.as_secs())
+            .abs_diff(query.duration.as_secs())
     });
     songs.truncate(CANDIDATES);
     songs
@@ -552,6 +566,17 @@ mod tests {
         assert_eq!(lines[0].secondary[0].start, Duration::from_millis(1000));
     }
 
+    /// The query the two shortlist tests answer for.
+    fn named(title: &str, artist: &str, seconds: u64) -> LyricsQuery {
+        LyricsQuery {
+            title: title.to_owned(),
+            artist: artist.to_owned(),
+            album: None,
+            duration: Duration::from_secs(seconds),
+            track: None,
+        }
+    }
+
     #[test]
     fn the_closest_durations_make_the_shortlist() {
         let song = |id: u64, duration: u64| Song {
@@ -571,7 +596,7 @@ mod tests {
             song(5, 264_000),
         ];
 
-        let picked = shortlist(songs, "Jaded", "Spiritbox", Duration::from_secs(263));
+        let picked = shortlist(songs, &named("Jaded", "Spiritbox", 263));
         let ids: Vec<u64> = picked.iter().map(|song| song.id).collect();
         assert_eq!(ids, vec![2, 3, 5]);
     }
@@ -600,7 +625,7 @@ mod tests {
             song(3, "Jaded", "Spiritbox", 264_000),
         ];
 
-        let picked = shortlist(songs, "Jaded", "Spiritbox", Duration::from_secs(263));
+        let picked = shortlist(songs, &named("Jaded", "Spiritbox", 263));
         let ids: Vec<u64> = picked.iter().map(|song| song.id).collect();
         assert_eq!(ids, vec![3]);
     }
