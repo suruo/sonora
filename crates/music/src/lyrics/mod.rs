@@ -33,24 +33,42 @@ const TRUSTED: u32 = 25;
 const CARRIED: u32 = 10;
 
 pub fn rank(query: &LyricsQuery, hits: Vec<LyricsHit>) -> Vec<LyricsHit> {
-    let mut scored: Vec<(i64, LyricsHit)> = hits
+    let mut scored: Vec<(bool, i64, LyricsHit)> = hits
         .into_iter()
         .filter(|hit| eligible(query, hit))
-        .map(|hit| (score(query, &hit), hit))
+        .map(|hit| {
+            (
+                names_the_track(&hit.title, &query.title),
+                score(query, &hit),
+                hit,
+            )
+        })
         .collect();
-    scored.sort_by(|(left_score, left), (right_score, right)| {
-        right_score
-            .cmp(left_score)
-            .then_with(|| left.source.cmp(right.source))
-            .then_with(|| left.title.cmp(&right.title))
-    });
+    scored.sort_by(
+        |(left_names, left_score, left), (right_names, right_score, right)| {
+            // a sheet that names the track itself comes before one that names a version of it,
+            // however well the version scores: a remix or a live take is another recording
+            right_names
+                .cmp(left_names)
+                .then_with(|| right_score.cmp(left_score))
+                .then_with(|| left.source.cmp(right.source))
+                .then_with(|| left.title.cmp(&right.title))
+        },
+    );
 
     let mut seen = HashSet::new();
     scored
         .into_iter()
-        .map(|(_, hit)| hit)
+        .map(|(_, _, hit)| hit)
         .filter(|hit| seen.insert(fingerprint(&hit.lyrics)))
         .collect()
+}
+
+/// Whether a sheet names the track the way the track names itself, rather than as a version of
+/// it. A remix, a live take or an instrumental is another recording whose words may differ, so
+/// its sheet answers only for the tracks nothing better names.
+fn names_the_track(claimed: &str, wanted: &str) -> bool {
+    title_similarity(claimed, wanted) == 1.
 }
 
 pub fn reshape(hits: &mut [LyricsHit]) {
