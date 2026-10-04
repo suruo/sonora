@@ -124,6 +124,11 @@ fn matched(query: &LyricsQuery, hit: &LyricsHit) -> bool {
 /// track to still be taken for it, in seconds. Tighter than what a sheet with a name to show for is
 /// given, because nothing but the length is left to go on.
 const NAMELESS: u64 = 2;
+/// How much of a Latin name a non-Latin one has to read as for the two to be weighed at all when
+/// nothing else about them can be compared. A reading taken by machine is often wrong — a kanji
+/// title can come out nothing like the reading the service filed it under — but the words it does
+/// get right are still there, and a name that shares none of them is another song.
+const READING_LEAST: f32 = 0.2;
 
 /// Whether a song a service lists could be the recording being played. What is comparable has to
 /// agree: the title, or the credits. A field the two services write in different scripts — one in
@@ -146,6 +151,7 @@ pub(crate) fn could_be(query: &LyricsQuery, title: &str, artist: &str, seconds: 
             scripts_differ(title, &query.title)
                 && scripts_differ(artist, &query.artist)
                 && close(NAMELESS)
+                && reading_similarity(title, &query.title) >= READING_LEAST
         }
     }
 }
@@ -165,6 +171,62 @@ fn scripts_differ(left: &str, right: &str) -> bool {
     written_in_latin(left) != written_in_latin(right)
 }
 
+/// How much of a name reads as the other one, for two names written in different scripts. A
+/// reading is not a translation, and reading a name out by machine is not the same as knowing it —
+/// 打上花火 comes back as "dauehanabi" where the service filed it under "Uchiagehanabi" — but the
+/// letters the two do share are the only thing such a pair has in common, and they are enough to
+/// tell one song from another of the same length.
+fn reading_similarity(left: &str, right: &str) -> f32 {
+    let against = |latin: &str, other: &str| {
+        readings(other)
+            .iter()
+            .map(|reading| dice(&spelled(latin), reading))
+            .fold(0., f32::max)
+    };
+    match (written_in_latin(left), written_in_latin(right)) {
+        (true, false) => against(left, right),
+        (false, true) => against(right, left),
+        _ => 0.,
+    }
+}
+
+/// How much two readings have in common, over the pairs of letters they are made of. Sound written
+/// out twice never comes out the same twice, so this counts what matches rather than asking for
+/// equality.
+fn dice(left: &[char], right: &[char]) -> f32 {
+    if left.len() < 2 || right.len() < 2 {
+        return 0.;
+    }
+    let mut right: Vec<(char, char)> = right.windows(2).map(|pair| (pair[0], pair[1])).collect();
+    let total = left.len() - 1 + right.len();
+    let mut shared = 0usize;
+    for pair in left.windows(2) {
+        let pair = (pair[0], pair[1]);
+        if let Some(place) = right.iter().position(|other| *other == pair) {
+            right.swap_remove(place);
+            shared += 1;
+        }
+    }
+    2. * shared as f32 / total as f32
+}
+
+/// The ways a name written in another script might be read out in Latin letters. More than one is
+/// offered because a name of kanji alone reads as the language its script suggests and as Japanese
+/// alike, and only one of those is the reading the other service filed it under.
+fn readings(text: &str) -> Vec<Vec<char>> {
+    let mut found: Vec<Vec<char>> = Vec::new();
+    let mut push = |letters: Vec<char>| {
+        if !letters.is_empty() && !found.contains(&letters) {
+            found.push(letters);
+        }
+    };
+    if let Some(romanized) = romanize::plain(text) {
+        push(spelled(&romanized.text));
+    }
+    push(spelled(&japanese::romanize(text)));
+    found
+}
+
 pub fn score(query: &LyricsQuery, hit: &LyricsHit) -> i64 {
     let mut score: i64 = i64::from(hit.trust);
     if let Some(duration) = hit.duration {
@@ -178,6 +240,11 @@ pub fn score(query: &LyricsQuery, hit: &LyricsHit) -> i64 {
     if alike(&hit.title, &query.title) {
         score += (f64::from(TITLE) * f64::from(title_similarity(&hit.title, &query.title))).round()
             as i64;
+    } else if scripts_differ(&hit.title, &query.title) {
+        // the two services write the name in different scripts, so what one of them reads as is
+        // all the two have in common
+        score += (f64::from(TITLE) * f64::from(reading_similarity(&hit.title, &query.title)))
+            .round() as i64;
     }
     if artists_alike(&hit.artist, &query.artist) {
         score += i64::from(ARTIST);
