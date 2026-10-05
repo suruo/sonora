@@ -252,7 +252,7 @@ impl LyricsProvider for Kugou {
 fn shortlist(songs: Vec<Song>, query: &LyricsQuery) -> Vec<Song> {
     let mut songs: Vec<Song> = songs
         .into_iter()
-        .filter(|song| crate::lyrics::could_be(query, &song.name, &song.singer, song.duration))
+        .filter(|song| crate::lyrics::could_be(query, &song.name, &song.singer))
         .collect();
     songs.sort_by(|left, right| {
         crate::lyrics::title_match(&right.name, &query.title)

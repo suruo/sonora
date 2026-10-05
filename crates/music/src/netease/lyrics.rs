@@ -213,9 +213,7 @@ impl LyricsProvider for NetEase {
 fn shortlist(songs: Vec<Song>, query: &LyricsQuery) -> Vec<Song> {
     let mut songs: Vec<Song> = songs
         .into_iter()
-        .filter(|song| {
-            crate::lyrics::could_be(query, &song.name, &credited(song), song.duration / 1_000)
-        })
+        .filter(|song| crate::lyrics::could_be(query, &song.name, &credited(song)))
         .collect();
     songs.sort_by(|left, right| {
         crate::lyrics::title_match(&right.name, &query.title)

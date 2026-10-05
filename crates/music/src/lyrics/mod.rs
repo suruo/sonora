@@ -19,13 +19,24 @@ pub const NETEASE: &str = "NetEase";
 pub const KUGOU: &str = "Kugou";
 
 const CLOSE_ENOUGH: u64 = 3;
-const WAY_OFF: u64 = 10;
+/// How far a sheet's own length may sit from the track's and still answer for it, in seconds, for
+/// one that names the song or its singer. The same song comes out at different lengths on different
+/// releases — 打上花火 runs 289 seconds on the single and 259 on the album it was later put on — and
+/// what a listener is after is the words, not that exact take, so a release half a minute either way
+/// is still taken for it. Which sheet is shown is the length's to say: the take timed closest to the
+/// track wins.
+const WAY_OFF: u64 = 30;
+/// The same, for a sheet with nothing but what its names read as to show for itself, which is the
+/// only thing keeping another recording of the same singer out. Less says it is the one, so it also
+/// has to run closer to the track.
+const READ_OFF: u64 = 20;
 /// What a sheet that runs to the track's own length is worth, and what every second it misses that
-/// length by, past the window that already counts as the same length, costs it — down to nothing at
-/// the length nothing more can be told from. Two services time one recording off different masters,
-/// so a second or two either way is their doing, not a sign of another recording.
+/// length by, past the window that already counts as the same length, costs it. The step is small
+/// enough to grade the whole span a release can differ by, so the take the track was timed against
+/// is the one shown, while two services timing one recording off different masters — a second or two
+/// either way — cost it nothing at all.
 const LENGTH: u32 = 100;
-const LENGTH_STEP: u32 = 15;
+const LENGTH_STEP: u32 = 2;
 const TITLE: u32 = 40;
 const ARTIST: u32 = 30;
 const ALBUM: u32 = 15;
@@ -56,6 +67,9 @@ pub fn rank(query: &LyricsQuery, hits: Vec<LyricsHit>) -> Vec<LyricsHit> {
             right_names
                 .cmp(left_names)
                 .then_with(|| right_score.cmp(left_score))
+                // sheets that name the song and score alike are told apart by their length: the one
+                // the track's own take was timed against is the one its words were laid on
+                .then_with(|| drift(query, left).cmp(&drift(query, right)))
                 .then_with(|| left.source.cmp(right.source))
                 .then_with(|| left.title.cmp(&right.title))
         },
@@ -112,17 +126,41 @@ pub fn instrumental(query: &LyricsQuery, hits: &[LyricsHit]) -> bool {
     matching().any(|hit| hit.instrumental) && !matching().any(|hit| !hit.lyrics.is_empty())
 }
 
+/// Whether a sheet answers for the track at all: it has to name the song or its singer by what they
+/// are written as, or read alike when the two are written in different scripts, and then run to
+/// something like the track's own length. Whether it names the track itself or a version of it is
+/// not asked here; that only decides the order the sheets come in.
 fn matched(query: &LyricsQuery, hit: &LyricsHit) -> bool {
-    let could = match hit.duration {
-        Some(duration) => could_be(query, &hit.title, &hit.artist, duration.as_secs()),
-        // a sheet that brings no length of its own can only answer by its title
-        None => alike(&hit.title, &query.title) && artists_alike(&hit.artist, &query.artist),
+    if !could_be(query, &hit.title, &hit.artist) {
+        return false;
+    }
+    // a sheet that brings no length of its own can only answer by its names
+    let Some(duration) = hit.duration else {
+        return alike(&hit.title, &query.title) && artists_alike(&hit.artist, &query.artist);
     };
-    could
-        && hit.duration.is_none_or(|duration| {
-            query.duration.is_zero()
-                || duration.as_secs().abs_diff(query.duration.as_secs()) <= WAY_OFF
-        })
+    query.duration.is_zero()
+        || duration.as_secs().abs_diff(query.duration.as_secs()) <= allowance(query, hit)
+}
+
+/// How far a sheet's own length may sit from the track's and still answer for it, by what the sheet
+/// has to show for itself: one that names the song or its singer is the recording whatever release
+/// it was taken from, while one only read alike has to be closer, since less says it is the one.
+fn allowance(query: &LyricsQuery, hit: &LyricsHit) -> u64 {
+    match alike(&hit.title, &query.title) || artists_alike(&hit.artist, &query.artist) {
+        true => WAY_OFF,
+        false => READ_OFF,
+    }
+}
+
+/// How far a sheet's own length sits from the track's, which is nothing at all for a sheet that
+/// carries no length or a track that never had one, so those are taken as they come.
+fn drift(query: &LyricsQuery, hit: &LyricsHit) -> u64 {
+    match hit.duration {
+        Some(duration) if !query.duration.is_zero() => {
+            duration.as_secs().abs_diff(query.duration.as_secs())
+        }
+        _ => 0,
+    }
 }
 
 /// How much of a Latin name a non-Latin one has to read as for the two to be weighed at all when
@@ -140,27 +178,23 @@ const READING_LIKELY: f32 = 0.35;
 /// same name in another character set reads the same way twice, so little is left to chance.
 const READING_SAME: f32 = 0.8;
 
-/// Whether a song a service lists could be the recording being played. What is comparable has to
-/// agree: the title, or the credits. A field the two services write in different scripts — one in
-/// Latin letters and the other not, so that neither can name the other — is not compared by its
-/// letters but by what it reads as, and then the length only has to be close, since two services
-/// time one recording off different masters. A sheet that names the track still scores its title and
-/// so comes first; this only lets the others in.
-pub(crate) fn could_be(query: &LyricsQuery, title: &str, artist: &str, seconds: u64) -> bool {
-    let close = |window: u64| {
-        !query.duration.is_zero() && seconds.abs_diff(query.duration.as_secs()) <= window
-    };
+/// Whether a song a service lists could be the one being played, by its names alone. What is
+/// comparable has to agree: the title, or the credits. A field the two services write in different
+/// scripts — one in Latin letters and the other not, so that neither can name the other — is not
+/// compared by its letters but by what it reads as. How long the sheet runs is not asked here: a
+/// song comes out at different lengths on different releases, and it is the length that sorts the
+/// sheets that get this far, not one that keeps them out.
+pub(crate) fn could_be(query: &LyricsQuery, title: &str, artist: &str) -> bool {
     match (
         artists_alike(artist, &query.artist),
         alike(title, &query.title),
     ) {
         (true, true) => true,
         // the title is not written the way the one asked for is, so its letters say nothing and its
-        // reading is what has to: a song by the same singer of the same length would otherwise
-        // answer for the one playing
+        // reading is what has to: a song by the same singer would otherwise answer for the one
+        // playing, its length being the only thing left to tell them apart
         (true, false) => {
             scripts_differ(title, &query.title)
-                && close(CLOSE_ENOUGH)
                 && reading_similarity(title, &query.title) >= READING_LIKELY
         }
         // the title names the track but the credits cannot be compared, so the credits have to at
@@ -168,15 +202,13 @@ pub(crate) fn could_be(query: &LyricsQuery, title: &str, artist: &str, seconds: 
         // in Latin letters would otherwise answer for a song its singer never recorded
         (false, true) => {
             scripts_differ(artist, &query.artist)
-                && close(CLOSE_ENOUGH)
                 && reading_similarity(artist, &query.artist) >= READING_LEAST
         }
         // neither name is written the way the other is, so both are read instead: what the title
-        // reads as is what says whether this is the one, and the length only narrows the list
+        // reads as is what says whether this is the one
         (false, false) => {
             scripts_differ(title, &query.title)
                 && scripts_differ(artist, &query.artist)
-                && close(CLOSE_ENOUGH)
                 && reading_similarity(title, &query.title) >= READING_LIKELY
         }
     }
@@ -725,7 +757,8 @@ mod tests {
     }
 
     #[test]
-    fn a_song_filed_under_another_script_with_another_name_for_its_artist_is_taken_by_length() {
+    fn a_song_filed_under_another_script_with_another_name_for_its_artist_is_taken_by_its_reading()
+    {
         let query = LyricsQuery {
             title: "Uchiagehanabi".to_owned(),
             artist: "Kenshi Yonezu".to_owned(),
@@ -735,13 +768,17 @@ mod tests {
         };
 
         // both the song and the credit are written the site's own way, which is what a service
-        // that romanizes everything leaves behind
+        // that romanizes everything leaves behind: what the two read as is what says it is the one
         let ranked = rank(&query, vec![hit("打上花火", "米津玄師", 289, true)]);
         assert_eq!(ranked.len(), 1);
 
-        // a length that does not agree is all it takes to be turned away, since that is all there
-        // was to go on
-        let lost = rank(&query, vec![hit("打上花火", "米津玄師", 293, true)]);
+        // another release of it, timed a few seconds either way, is the same words
+        let ranked = rank(&query, vec![hit("打上花火", "米津玄師", 293, true)]);
+        assert_eq!(ranked.len(), 1);
+
+        // a length too far off, with nothing but the reading to say it is not the one, is another
+        // recording
+        let lost = rank(&query, vec![hit("打上花火", "米津玄師", 340, true)]);
         assert!(lost.is_empty());
     }
 
