@@ -165,18 +165,13 @@ impl LyricsProvider for QQ {
     }
 
     async fn search(&self, query: &LyricsQuery) -> Result<Vec<LyricsHit>> {
-        // The site is asked by name, then by the title alone, then by the artist alone. A service
-        // that romanizes its titles calls a Japanese song by its reading, which names nothing the
-        // site holds it under, and the title alone still finds it.
+        // The site is asked by name, then by the title alone. A service that romanizes its titles
+        // calls a Japanese song by its reading, which names nothing the site holds it under, and
+        // the title alone still finds it.
         let wanted = format!("{} {}", query.title, query.artist);
         let mut songs = shortlist(self.songs(&wanted).await?, query);
-        let mut by_title = true;
         if songs.is_empty() {
             songs = shortlist(self.songs(&query.title).await?, query);
-        }
-        if songs.is_empty() {
-            songs = shortlist(self.songs(&query.artist).await?, query);
-            by_title = false;
         }
 
         let mut tasks = JoinSet::new();
@@ -187,10 +182,7 @@ impl LyricsProvider for QQ {
             let title = query.title.clone();
             // a search that named the title and came back with a sheet whose own title cannot be
             // compared with it matched something only the site can see
-            let trust = match by_title {
-                true => crate::lyrics::answered_by_title(&song.title, &title),
-                false => 0,
-            };
+            let trust = crate::lyrics::answered_by_title(&song.title, &title);
             tasks.spawn(async move {
                 let verses = qq
                     .lyric(&song.mid)

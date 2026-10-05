@@ -12,19 +12,14 @@ const SOURCE: &str = crate::lyrics::NETEASE;
 /// The provider's slug. A query names the track's origin by slug, which is not the display name
 /// in [`SOURCE`], and only a track that came from this site can be asked for by id.
 const SLUG: &str = "netease";
-/// What a sheet fetched by id is worth, and what one found by name is worth. The site hands a
-/// track's own lyrics over for its own id and only guesses a recording for a name, so the two
-/// must not rank alike.
+/// What a sheet fetched by id is worth: the site hands a track's own lyrics over for its own id,
+/// where a sheet found by name is only ever the site's answer to a search.
 const EXACT: u32 = crate::lyrics::catalog::TRUST;
-const GUESSED: u32 = 0;
 const SEARCH: &str = "https://music.163.com/api/search/get";
 const LYRIC: &str = "https://music.163.com/api/song/lyric/v1";
 const CANDIDATES: usize = 3;
-/// How many songs a name search may answer with, and how many the artist-alone fallback may, which
-/// has to reach far enough down a popular artist's list to find the one asked for: the song this
-/// exists for sat thirty-fifth, behind that artist's best known records.
+/// How many songs a name search may answer with.
 const HITS: usize = 5;
-const NAMED: usize = 50;
 /// How far a side sheet's time may sit from the line it belongs to and still be taken for it, in
 /// milliseconds. Wide enough for the tens the site's own two timelines differ by, narrow enough
 /// that a line never takes its neighbour's words.
@@ -164,19 +159,13 @@ impl LyricsProvider for NetEase {
             return Ok(sheet_hit(query, &sheet, EXACT).into_iter().collect());
         }
 
-        // The site is asked by name, then by the title alone, then by the artist alone. A service
-        // that romanizes its titles calls a Japanese song by its reading, which names nothing the
-        // site holds it under, and the title alone still finds it; the artist alone answers with
-        // that artist's best known songs, where the one asked for may sit far down the list.
+        // The site is asked by name, then by the title alone. A service that romanizes its titles
+        // calls a Japanese song by its reading, which names nothing the site holds it under, and
+        // the title alone still finds it.
         let wanted = format!("{} {}", query.title, query.artist);
         let mut songs = shortlist(self.search_songs(&wanted, HITS).await?, query);
-        let mut by_title = true;
         if songs.is_empty() {
             songs = shortlist(self.search_songs(&query.title, HITS).await?, query);
-        }
-        if songs.is_empty() {
-            songs = shortlist(self.search_songs(&query.artist, NAMED).await?, query);
-            by_title = false;
         }
 
         let mut tasks = JoinSet::new();
@@ -187,10 +176,7 @@ impl LyricsProvider for NetEase {
             let named = song_query(&song);
             // a search that named the title and came back with a sheet whose own title cannot be
             // compared with it matched something only the site can see
-            let trust = match by_title {
-                true => crate::lyrics::answered_by_title(&named.title, &query.title),
-                false => GUESSED,
-            };
+            let trust = crate::lyrics::answered_by_title(&named.title, &query.title);
             tasks.spawn(async move {
                 let sheet = netease
                     .lyric(song.id)
