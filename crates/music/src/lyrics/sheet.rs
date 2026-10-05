@@ -205,13 +205,11 @@ fn tagged(text: &str) -> bool {
 
 /// Whether the title a sheet says it holds could be the name the track is filed under, which is how
 /// a sheet that carries another song's words is kept out. Two names in the same script share a word;
-/// two in different scripts can never, and are then compared by what they read as — a sheet whose
-/// header spells 打上花火 for a track a service calls Uchiagehanabi is the track's own sheet, not
-/// another song's, and reading it is the only way to tell.
+/// a name too short to have one, or one written in another script, says nothing either way and is
+/// taken as the sheet's own. No reading is read for a title here, as none is read for one anywhere:
+/// what a name is filed under is the letters a service writes it with, and the search that handed
+/// the sheet over is what answers for the script it was written in.
 fn related(claimed: &str, name: &str) -> bool {
-    if super::reading_similarity(claimed, name) >= super::READING_LIKELY {
-        return true;
-    }
     let words = |text: &str| {
         text.split(|letter: char| !letter.is_alphanumeric())
             .map(|word| word.to_lowercase())

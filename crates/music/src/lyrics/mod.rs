@@ -130,9 +130,9 @@ pub fn instrumental(query: &LyricsQuery, hits: &[LyricsHit]) -> bool {
 }
 
 /// Whether a sheet answers for the track at all: it has to name the song or its singer by what they
-/// are written as, or read alike when the two are written in different scripts, and then run to
-/// something like the track's own length. Whether it names the track itself or a version of it is
-/// not asked here; that only decides the order the sheets come in.
+/// are written as, or carry a title written in another script that the search vouched for, and then
+/// run to something like the track's own length. Whether it names the track itself or a version of
+/// it is not asked here; that only decides the order the sheets come in.
 fn matched(query: &LyricsQuery, hit: &LyricsHit) -> bool {
     if !could_be(query, &hit.title, &hit.artist) {
         return false;
@@ -147,7 +147,8 @@ fn matched(query: &LyricsQuery, hit: &LyricsHit) -> bool {
 
 /// How far a sheet's own length may sit from the track's and still answer for it, by what the sheet
 /// has to show for itself: one that names the song or its singer is the recording whatever release
-/// it was taken from, while one only read alike has to be closer, since less says it is the one.
+/// it was taken from, while one whose title and credits both had to be taken on the search's word
+/// has to be closer, since less says it is the one.
 fn allowance(query: &LyricsQuery, hit: &LyricsHit) -> u64 {
     match alike(&hit.title, &query.title) || artists_alike(&hit.artist, &query.artist) {
         true => WAY_OFF,
@@ -167,66 +168,60 @@ fn drift(query: &LyricsQuery, hit: &LyricsHit) -> u64 {
 }
 
 /// How much of a Latin name a non-Latin one has to read as for the two to be weighed at all when
-/// nothing else about them can be compared. A reading taken by machine is often wrong — a kanji
-/// title can come out nothing like the reading the service filed it under — but the words it does
-/// get right are still there, and a name that shares none of them is another song.
+/// nothing else about them can be compared. A reading taken by machine is often wrong — 米津玄師
+/// comes out "mijinxuanshi" where a service filed the act under "Kenshi Yonezu" — but the words it
+/// does get right are still there, and a credit that shares none of them is another act.
 const READING_LEAST: f32 = 0.2;
-/// How much of a title another script has to read as for the two to be taken for one song written
-/// two ways, the letters having said nothing. Unrelated titles still come out sharing about a fifth
-/// of their bigrams — 感電 and M八七 read 0.22 and 0.26 of Uchiagehanabi, both another song by the
-/// same singer one or two seconds off the length asked for — where the song itself reads 0.57, so
-/// the floor sits above the noise that a shared singer and a shared length would let through.
-const READING_LIKELY: f32 = 0.35;
-/// How much of a reading two names have to share to be taken for one name written two ways. The
+/// How much of a reading two credits have to share to be taken for one act written two ways. The
 /// same name in another character set reads the same way twice, so little is left to chance.
 const READING_SAME: f32 = 0.8;
 
 /// Whether a song a service lists could be the one being played, by its names alone. What is
-/// comparable has to agree: the title, or the credits. A field the two services write in different
-/// scripts — one in Latin letters and the other not, so that neither can name the other — is not
-/// compared by its letters but by what it reads as. How long the sheet runs is not asked here: a
-/// song comes out at different lengths on different releases, and it is the length that sorts the
-/// sheets that get this far, not one that keeps them out.
+/// comparable has to agree: the title, or the credits. A title is compared by the letters it is
+/// written with and by nothing else: a service that romanizes its titles calls a Japanese song by
+/// its reading, which is not a name any reading of ours has to confirm, and the search that answered
+/// with this song asked for that title, so a title written in another script than the one asked for
+/// is taken as the service handed it over — unless the name asked for is written into it, when the
+/// letters still have something to say. What keeps another act's version out is then the credit,
+/// which is compared by what it reads as when the two are written differently. How long the sheet
+/// runs is not asked here: a song comes out at different lengths on different releases, and it is
+/// the length that sorts the sheets that get this far, not one that keeps them out.
 pub(crate) fn could_be(query: &LyricsQuery, title: &str, artist: &str) -> bool {
-    match (
-        artists_alike(artist, &query.artist),
-        alike(title, &query.title),
-    ) {
-        (true, true) => true,
-        // the title is not written the way the one asked for is, so its letters say nothing and its
-        // reading is what has to: a song by the same singer would otherwise answer for the one
-        // playing, its length being the only thing left to tell them apart
-        (true, false) => {
-            scripts_differ(title, &query.title)
-                && reading_similarity(title, &query.title) >= READING_LIKELY
-        }
-        // the title names the track but the credits cannot be compared, so the credits have to at
-        // least read like the ones asked for: a cover by someone whose name happens to be written
-        // in Latin letters would otherwise answer for a song its singer never recorded
-        (false, true) => {
-            scripts_differ(artist, &query.artist)
-                && reading_similarity(artist, &query.artist) >= READING_LEAST
-        }
-        // neither name is written the way the other is, so both are read instead: what the title
-        // reads as is what says whether this is the one
-        (false, false) => {
-            scripts_differ(title, &query.title)
-                && scripts_differ(artist, &query.artist)
-                && reading_similarity(title, &query.title) >= READING_LIKELY
-        }
+    let credits = artists_alike(artist, &query.artist);
+    if alike(title, &query.title) {
+        // the title names the track, so the credits are what is left to answer for it: someone else
+        // singing this song did not record the one playing. A credit the letters cannot compare at
+        // all still has to read like the one asked for
+        return credits
+            || (scripts_differ(artist, &query.artist)
+                && reading_similarity(artist, &query.artist) >= READING_LEAST);
     }
+    // the letters said nothing, so the title has to be one the letters could never name — written in
+    // another script — and one the track's own title is not written into: a title that carries the
+    // name asked for and tacks another take onto it is a version, which the letters judge like any
+    // other, not a name a service filed in a script of its own
+    scripts_differ(title, &query.title)
+        && !written_into(title, &query.title)
+        && (credits || scripts_differ(artist, &query.artist))
 }
 
 /// How much of a track's own title a song's title answers for, from nothing to all of it, for a
 /// provider choosing which of its search's answers are worth fetching a sheet for. It is the measure
-/// the ranking weighs a title by, so the sheets fetched are the ones the ranking will want.
+/// the ranking weighs a title by, so the sheets fetched are the ones the ranking will want. A title
+/// is weighed by its letters alone, as it is matched.
 pub(crate) fn title_match(claimed: &str, wanted: &str) -> f32 {
-    name_similarity(claimed, wanted, title_letters)
+    title_letters(claimed, wanted)
 }
 
 /// How much of a track's own artist line a song's credit answers for, from nothing to all of it.
+/// A credit is weighed by its letters and by what it reads as, since the services write one act in
+/// another script as often as not.
 pub(crate) fn artist_match(claimed: &str, wanted: &str) -> f32 {
-    name_similarity(claimed, wanted, artist_letters)
+    let (claimed, wanted) = (claimed.trim(), wanted.trim());
+    if claimed.is_empty() || wanted.is_empty() {
+        return 0.;
+    }
+    artist_letters(claimed, wanted).max(reading_similarity(claimed, wanted))
 }
 
 /// Whether a title is written in Latin letters and no others.
@@ -313,21 +308,18 @@ pub fn score(query: &LyricsQuery, hit: &LyricsHit) -> i64 {
         score += i64::from(LENGTH.saturating_sub(past * LENGTH_STEP));
     }
     if comparable(&hit.title, &query.title) {
-        score += (f64::from(TITLE)
-            * f64::from(name_similarity(&hit.title, &query.title, title_letters)))
-        .round() as i64;
+        score +=
+            (f64::from(TITLE) * f64::from(title_match(&hit.title, &query.title))).round() as i64;
     }
     if comparable(&hit.artist, &query.artist) {
-        score += (f64::from(ARTIST)
-            * f64::from(name_similarity(&hit.artist, &query.artist, artist_letters)))
-        .round() as i64;
+        score += (f64::from(ARTIST) * f64::from(artist_match(&hit.artist, &query.artist))).round()
+            as i64;
     }
     if let Some(album) = &query.album
         && let Some(named) = &hit.album
         && comparable(named, album)
     {
-        score += (f64::from(ALBUM) * f64::from(name_similarity(named, album, title_letters)))
-            .round() as i64;
+        score += (f64::from(ALBUM) * f64::from(title_match(named, album))).round() as i64;
     }
     if hit.lyrics.synced() {
         score += i64::from(SYNCED);
@@ -361,21 +353,6 @@ fn spelled(text: &str) -> Vec<char> {
 /// alone elsewhere.
 fn comparable(left: &str, right: &str) -> bool {
     alike(left, right) || scripts_differ(left, right)
-}
-
-/// How much of one name another carries, from nothing to all of it: what the two have in common in
-/// the letters they are written with, and what they have in common in the way they read — the only
-/// thing left to go on when the same name is written in another script or another character set —
-/// whichever of the two says more. The names are read as they stand, decorations and all, because
-/// what a version calls itself is exactly what tells it from the track it is a version of.
-/// `by_letters` is how the letters are weighed, which is not the same for every field: a title is a
-/// run of words and a credit is a list of names.
-fn name_similarity(claimed: &str, wanted: &str, by_letters: fn(&str, &str) -> f32) -> f32 {
-    let (claimed, wanted) = (claimed.trim(), wanted.trim());
-    if claimed.is_empty() || wanted.is_empty() {
-        return 0.;
-    }
-    by_letters(claimed, wanted).max(reading_similarity(claimed, wanted))
 }
 
 /// How much of the track's own title a sheet's title carries, from none of it to all of it. What
@@ -528,14 +505,17 @@ fn fingerprint(lyrics: &Lyrics) -> String {
     }
 }
 
-/// Whether two titles name the same thing, decoration aside. Shared with the providers so
-/// they can drop the songs that never could be the one being played before fetching sheets.
+/// Whether two titles name the same thing, decoration aside. A title is taken by the letters it is
+/// written with and never by what it reads as: a reading of the title taken by machine is no more
+/// than a guess, and the search that answered with a song is what says the title in its own script
+/// is the one asked for. Shared with the providers so they can drop the songs that never could be
+/// the one being played before fetching sheets.
 pub(crate) fn alike(left: &str, right: &str) -> bool {
     let (left, right) = (undecorated(left), undecorated(right));
     if left.is_empty() || right.is_empty() {
         return false;
     }
-    held(&left, &right) || reads_alike(&left, &right)
+    held(&left, &right)
 }
 
 /// Whether one name holds the other whole, which is how a decorated title meets a plain one. The
@@ -551,6 +531,15 @@ fn held(left: &str, right: &str) -> bool {
     long.contains(short) && short.len() * 2 >= long.len()
 }
 
+/// Whether a title has another one written into it whole, letters and all, whatever is strung
+/// around it. This is how a take names itself — a remix, a live version, an edition whose name
+/// carries the track's own — and such a title is the letters' to judge, like any other, rather than
+/// a name a service filed in a script of its own.
+fn written_into(claimed: &str, wanted: &str) -> bool {
+    let wanted = undecorated(wanted);
+    !wanted.is_empty() && undecorated(claimed).contains(&wanted)
+}
+
 /// Whether two names read the same, near enough to be one name written two ways. This is what
 /// catches a name the two sides write in different character sets: a Chinese storefront writes
 /// 米津玄师 where the services write 米津玄師, and not a character of one is in the other, but both
@@ -560,11 +549,18 @@ fn reads_alike(left: &str, right: &str) -> bool {
     reading_similarity(left, right) >= READING_SAME
 }
 
-/// Whether two credited-artist lines name anyone in common. Shared with the providers, as
-/// [`alike`] is.
+/// Whether two names are one name written two ways, by their letters or, when the letters cannot
+/// compare them, by what they read as.
+fn names_alike(left: &str, right: &str) -> bool {
+    alike(left, right) || reads_alike(left, right)
+}
+
+/// Whether two credited-artist lines name anyone in common. Shared with the providers, as [`alike`]
+/// is. A credit is the one name whose reading is read, since the services write one act in another
+/// script as often as not.
 pub(crate) fn artists_alike(left: &str, right: &str) -> bool {
-    alike(left, right)
-        || artist_names(left).any(|left| artist_names(right).any(|right| alike(left, right)))
+    names_alike(left, right)
+        || artist_names(left).any(|left| artist_names(right).any(|right| names_alike(left, right)))
 }
 
 fn artist_names(artists: &str) -> impl Iterator<Item = &str> {
@@ -789,8 +785,7 @@ mod tests {
     }
 
     #[test]
-    fn a_song_filed_under_another_script_with_another_name_for_its_artist_is_taken_by_its_reading()
-    {
+    fn a_song_filed_under_another_script_is_taken_as_the_search_answered() {
         let query = LyricsQuery {
             title: "Uchiagehanabi".to_owned(),
             artist: "Kenshi Yonezu".to_owned(),
@@ -800,7 +795,8 @@ mod tests {
         };
 
         // both the song and the credit are written the site's own way, which is what a service
-        // that romanizes everything leaves behind: what the two read as is what says it is the one
+        // that romanizes everything leaves behind: no reading of the title is weighed, and the
+        // search that came back with the song is what stands for it
         let ranked = rank(&query, vec![hit("打上花火", "米津玄師", 289, true)]);
         assert_eq!(ranked.len(), 1);
 
@@ -808,8 +804,8 @@ mod tests {
         let ranked = rank(&query, vec![hit("打上花火", "米津玄師", 293, true)]);
         assert_eq!(ranked.len(), 1);
 
-        // a length too far off, with nothing but the reading to say it is not the one, is another
-        // recording
+        // a length too far off, with nothing but the two names' own scripts to say it is not the
+        // one, is another recording
         let lost = rank(&query, vec![hit("打上花火", "米津玄師", 340, true)]);
         assert!(lost.is_empty());
     }
