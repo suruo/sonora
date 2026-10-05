@@ -125,25 +125,27 @@ fn matched(query: &LyricsQuery, hit: &LyricsHit) -> bool {
         })
 }
 
-/// How far two lengths may sit apart for a sheet that shares neither a title nor a credit with the
-/// track to still be taken for it, in seconds. Tighter than what a sheet with a name to show for is
-/// given, because nothing but the length is left to go on.
-const NAMELESS: u64 = 2;
 /// How much of a Latin name a non-Latin one has to read as for the two to be weighed at all when
 /// nothing else about them can be compared. A reading taken by machine is often wrong — a kanji
 /// title can come out nothing like the reading the service filed it under — but the words it does
 /// get right are still there, and a name that shares none of them is another song.
 const READING_LEAST: f32 = 0.2;
+/// How much of a title another script has to read as for the two to be taken for one song written
+/// two ways, the letters having said nothing. Unrelated titles still come out sharing about a fifth
+/// of their bigrams — 感電 and M八七 read 0.22 and 0.26 of Uchiagehanabi, both another song by the
+/// same singer one or two seconds off the length asked for — where the song itself reads 0.57, so
+/// the floor sits above the noise that a shared singer and a shared length would let through.
+const READING_LIKELY: f32 = 0.35;
 /// How much of a reading two names have to share to be taken for one name written two ways. The
 /// same name in another character set reads the same way twice, so little is left to chance.
 const READING_SAME: f32 = 0.8;
 
 /// Whether a song a service lists could be the recording being played. What is comparable has to
 /// agree: the title, or the credits. A field the two services write in different scripts — one in
-/// Latin letters and the other not, so that neither can name the other — is not comparable at all,
-/// and is then weighed by length instead; when both the song and its artist are written that way,
-/// which is what a service that romanizes everything leaves, the length is all there is. A sheet
-/// that names the track still scores its title and so comes first; this only lets the others in.
+/// Latin letters and the other not, so that neither can name the other — is not compared by its
+/// letters but by what it reads as, and then the length only has to be close, since two services
+/// time one recording off different masters. A sheet that names the track still scores its title and
+/// so comes first; this only lets the others in.
 pub(crate) fn could_be(query: &LyricsQuery, title: &str, artist: &str, seconds: u64) -> bool {
     let close = |window: u64| {
         !query.duration.is_zero() && seconds.abs_diff(query.duration.as_secs()) <= window
@@ -153,7 +155,14 @@ pub(crate) fn could_be(query: &LyricsQuery, title: &str, artist: &str, seconds: 
         alike(title, &query.title),
     ) {
         (true, true) => true,
-        (true, false) => scripts_differ(title, &query.title) && close(CLOSE_ENOUGH),
+        // the title is not written the way the one asked for is, so its letters say nothing and its
+        // reading is what has to: a song by the same singer of the same length would otherwise
+        // answer for the one playing
+        (true, false) => {
+            scripts_differ(title, &query.title)
+                && close(CLOSE_ENOUGH)
+                && reading_similarity(title, &query.title) >= READING_LIKELY
+        }
         // the title names the track but the credits cannot be compared, so the credits have to at
         // least read like the ones asked for: a cover by someone whose name happens to be written
         // in Latin letters would otherwise answer for a song its singer never recorded
@@ -162,11 +171,13 @@ pub(crate) fn could_be(query: &LyricsQuery, title: &str, artist: &str, seconds: 
                 && close(CLOSE_ENOUGH)
                 && reading_similarity(artist, &query.artist) >= READING_LEAST
         }
+        // neither name is written the way the other is, so both are read instead: what the title
+        // reads as is what says whether this is the one, and the length only narrows the list
         (false, false) => {
             scripts_differ(title, &query.title)
                 && scripts_differ(artist, &query.artist)
-                && close(NAMELESS)
-                && reading_similarity(title, &query.title) >= READING_LEAST
+                && close(CLOSE_ENOUGH)
+                && reading_similarity(title, &query.title) >= READING_LIKELY
         }
     }
 }
