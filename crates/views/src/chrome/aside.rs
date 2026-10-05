@@ -197,58 +197,6 @@ enum Warm {
     Break(usize),
 }
 
-/// Which of the tracks that came with the sheet the panel draws under the words, besides the
-/// words themselves, which are always drawn. How many there are is whatever the sheet turned out
-/// to carry, so a track is picked by its place rather than by what it holds. Pronunciation is not
-/// one of these: whether Sonora's own is drawn is the settings' business, and it is drawn
-/// whenever they ask for it, beside whichever track is chosen here.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum AsideTrack {
-    /// The track at this place in the sheet, counting from the first.
-    Place(usize),
-    /// The words alone, hiding whatever else came with them.
-    Words,
-}
-
-impl AsideTrack {
-    /// What this choice comes to for a sheet that carries `tracks` tracks. A choice the sheet
-    /// cannot honour gives way to the first track it has, so a sheet with fewer tracks than the
-    /// last one does not leave the panel showing nothing; `Words` is a choice to see the words
-    /// alone and is always honoured.
-    fn resolve(self, tracks: usize) -> Self {
-        match self {
-            Self::Words => Self::Words,
-            Self::Place(place) if place < tracks => self,
-            _ => match tracks {
-                0 => Self::Words,
-                _ => Self::Place(0),
-            },
-        }
-    }
-
-    /// The choice after this one, wrapping through `tracks` tracks and ending at
-    /// [`AsideTrack::Words`].
-    fn next(self, tracks: usize) -> Self {
-        let last = tracks.saturating_sub(1);
-        match self {
-            Self::Place(place) if place < last => Self::Place(place + 1),
-            Self::Place(_) => Self::Words,
-            Self::Words => match tracks {
-                0 => Self::Words,
-                _ => Self::Place(0),
-            },
-        }
-    }
-
-    /// The track this choice names, when it names one.
-    fn place(self) -> Option<usize> {
-        match self {
-            Self::Place(place) => Some(place),
-            Self::Words => None,
-        }
-    }
-}
-
 /// How near the pointer a spot is, and how far it has been pressed.
 #[derive(Clone, Copy, Default)]
 struct Touch {
@@ -311,8 +259,10 @@ pub(crate) struct Aside {
     lyrics: Entity<Lyrics>,
     settings: Entity<AppSettings>,
     tab: SideTab,
-    /// Which extra track the panel draws under the words, as far as the sheet can honour it.
-    track: AsideTrack,
+    /// Whether the translation the sheet came with is drawn under the words. What a sheet carries
+    /// besides its words is a translation; how the words are read aloud is the settings' business,
+    /// and is drawn beside this whenever they ask for it.
+    translated: bool,
     verse_bar: Entity<Scrollbar>,
     followed: Option<usize>,
     nudges: u64,
@@ -407,7 +357,7 @@ impl Aside {
             lyrics,
             settings,
             tab,
-            track: AsideTrack::Place(0),
+            translated: true,
             verse_bar,
             followed: None,
             nudges: 0,
@@ -969,41 +919,33 @@ impl Aside {
             })
     }
 
-    /// The control the panel's corner offers when the sheet on show carries more than its words.
-    /// Pressing it steps to the track after the one drawn, and past the last one back to the
-    /// words alone; a sheet with nothing to step through gets no control at all. The tracks are
-    /// numbered rather than named, because the services file readings and translations under the
-    /// same heading and only whoever is reading them can say which is which.
-    fn track_switch(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+    /// The control the panel's corner offers when the sheet on show came with a translation.
+    /// Pressing it draws that translation under the words, and pressing it again takes it away; a
+    /// sheet the service did not translate gets no control at all, there being nothing to switch
+    /// between.
+    fn translation_switch(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         let theme = *cx.theme();
         let shown = self
             .lyrics
             .read(cx)
             .current()
             .map(|hit| hit.lyrics.clone())?;
-        let tracks = tracks_in(&shown);
-        if tracks == 0 {
+        if !translated_in(&shown) {
             return None;
         }
 
-        let current = self.track.resolve(tracks);
-        let next = current.next(tracks);
-        let label = match current.place() {
-            Some(place) => t!("lyrics-track-number", number = place + 1),
-            None => t!("lyrics-track-words"),
-        };
         Some(
-            Button::new("lyrics-track")
+            Button::new("lyrics-translation")
                 .ghost()
                 .small()
-                .label(label)
-                .tooltip("lyrics-track-switch")
-                .tint(match current {
-                    AsideTrack::Words => theme.muted_foreground,
-                    AsideTrack::Place(_) => theme.primary,
+                .label(t!("lyrics-translation"))
+                .tooltip("lyrics-translation-switch")
+                .tint(match self.translated {
+                    true => theme.primary,
+                    false => theme.muted_foreground,
                 })
                 .on_click(cx.listener(move |this, _, _, cx| {
-                    this.track = next;
+                    this.translated = !this.translated;
                     cx.notify();
                 }))
                 .into_any_element(),
@@ -1075,11 +1017,10 @@ impl Aside {
                     .then(|| settings.romanization_scripts()),
             )
         };
-        let tracks = match &shown {
-            Some(lyrics) => tracks_in(lyrics),
-            None => 0,
+        let translated = match &shown {
+            Some(lyrics) => self.translated && translated_in(lyrics),
+            None => false,
         };
-        let chosen_track = self.track.resolve(tracks).place();
         let karaoke_effects = karaoke_lyrics && effects();
         let scale = match self.titled {
             true => self.settings.read(cx).panel_lyrics_scale(),
@@ -1374,12 +1315,15 @@ impl Aside {
                             .child(SharedString::from(line.text.clone()))
                             .into_any_element(),
                     };
-                    let chosen_line = chosen_track.and_then(|place| {
-                        line.tracks
-                            .get(place)
-                            .filter(|text| !text.trim().is_empty())
-                            .cloned()
-                    });
+                    // a sheet files one translation, under the words of the line it belongs to
+                    let chosen_line = match translated {
+                        true => line
+                            .tracks
+                            .iter()
+                            .find(|text| !text.trim().is_empty())
+                            .cloned(),
+                        false => None,
+                    };
                     let fade = match (line.secondary.is_empty(), active, departing) {
                         (true, _, _) => None,
                         (_, true, _) => Some(("lane-in", self.arrival, growing)),
@@ -1900,7 +1844,7 @@ impl Render for Aside {
         }
 
         let switch = match self.tab {
-            SideTab::Lyrics => self.track_switch(cx),
+            SideTab::Lyrics => self.translation_switch(cx),
             SideTab::Queue => None,
         };
 
@@ -2254,17 +2198,15 @@ fn selected_romanization(
         .then(|| romanized.text.clone())
 }
 
-/// How many tracks a sheet carries under its words. The services file as many as whoever made
-/// the sheet left, and nothing here says what any of them is.
-fn tracks_in(lyrics: &music::Lyrics) -> usize {
+/// Whether a sheet came with a translation, which is the one thing a service files under its words
+/// that the panel draws: a line the service left untranslated holds an empty entry rather than none.
+fn translated_in(lyrics: &music::Lyrics) -> bool {
     let music::Lyrics::Synced { lines } = lyrics else {
-        return 0;
+        return false;
     };
     lines
         .iter()
-        .map(|line| line.tracks.len())
-        .max()
-        .unwrap_or_default()
+        .any(|line| line.tracks.iter().any(|text| !text.trim().is_empty()))
 }
 
 /// A line drawn under the words it belongs to: a pronunciation or a translation, in the panel's
