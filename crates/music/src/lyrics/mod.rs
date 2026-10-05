@@ -182,6 +182,18 @@ pub(crate) fn could_be(query: &LyricsQuery, title: &str, artist: &str, seconds: 
     }
 }
 
+/// How much of a track's own title a song's title answers for, from nothing to all of it, for a
+/// provider choosing which of its search's answers are worth fetching a sheet for. It is the measure
+/// the ranking weighs a title by, so the sheets fetched are the ones the ranking will want.
+pub(crate) fn title_match(claimed: &str, wanted: &str) -> f32 {
+    name_similarity(claimed, wanted, title_letters)
+}
+
+/// How much of a track's own artist line a song's credit answers for, from nothing to all of it.
+pub(crate) fn artist_match(claimed: &str, wanted: &str) -> f32 {
+    name_similarity(claimed, wanted, artist_letters)
+}
+
 /// Whether a title is written in Latin letters and no others.
 fn written_in_latin(text: &str) -> bool {
     let mut letters = text

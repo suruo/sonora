@@ -192,11 +192,15 @@ impl LyricsProvider for Kugou {
     }
 
     async fn search(&self, query: &LyricsQuery) -> Result<Vec<LyricsHit>> {
-        // The site is asked by name, and by the artist alone when that finds nothing that could be
-        // the recording: a service that romanizes its titles calls a Japanese song by its reading,
-        // which names nothing the site holds it under.
+        // The site is asked by name, then by the title alone, then by the artist alone. A service
+        // that romanizes its titles calls a Japanese song by its reading, which names nothing the
+        // site holds it under, and the title alone still finds it; the artist alone answers with
+        // that artist's best known songs, where the one asked for may sit far down the list.
         let wanted = format!("{} {}", query.artist, query.title);
         let mut songs = shortlist(self.songs(&wanted).await?, query);
+        if songs.is_empty() {
+            songs = shortlist(self.songs(&query.title).await?, query);
+        }
         if songs.is_empty() {
             songs = shortlist(self.songs(&query.artist).await?, query);
         }
@@ -239,19 +243,29 @@ impl LyricsProvider for Kugou {
     }
 }
 
-/// The songs worth fetching sheets for: those that could be the recording being played, nearest in
-/// length first. The site answers a name search with its own idea of what fits, which includes
-/// other songs by the same artist and covers by other people, and every one of those left in would
-/// take the place of a song that could actually be the one being played.
+/// The songs worth fetching sheets for: those that could be the recording being played, the ones
+/// whose names answer for it best first. The site answers a name search with its own idea of what
+/// fits, which includes other songs by the same artist and covers by other people, and every one of
+/// those left in would take the place of a song that could actually be the one being played. Every
+/// one of them is already inside the window that counts as the same length, so what the two names
+/// say is worth more than the second or two one of them is off by.
 fn shortlist(songs: Vec<Song>, query: &LyricsQuery) -> Vec<Song> {
     let mut songs: Vec<Song> = songs
         .into_iter()
         .filter(|song| crate::lyrics::could_be(query, &song.name, &song.singer, song.duration))
         .collect();
-    songs.sort_by_key(|song| {
-        Duration::from_secs(song.duration)
-            .as_secs()
-            .abs_diff(query.duration.as_secs())
+    songs.sort_by(|left, right| {
+        crate::lyrics::title_match(&right.name, &query.title)
+            .total_cmp(&crate::lyrics::title_match(&left.name, &query.title))
+            .then_with(|| {
+                crate::lyrics::artist_match(&right.singer, &query.artist)
+                    .total_cmp(&crate::lyrics::artist_match(&left.singer, &query.artist))
+            })
+            .then_with(|| {
+                left.duration
+                    .abs_diff(query.duration.as_secs())
+                    .cmp(&right.duration.abs_diff(query.duration.as_secs()))
+            })
     });
     songs.truncate(SONGS);
     songs

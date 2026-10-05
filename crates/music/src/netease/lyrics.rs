@@ -21,9 +21,10 @@ const SEARCH: &str = "https://music.163.com/api/search/get";
 const LYRIC: &str = "https://music.163.com/api/song/lyric/v1";
 const CANDIDATES: usize = 3;
 /// How many songs a name search may answer with, and how many the artist-alone fallback may, which
-/// has to reach further down a popular artist's list to find the one asked for.
+/// has to reach far enough down a popular artist's list to find the one asked for: the song this
+/// exists for sat thirty-fifth, behind that artist's best known records.
 const HITS: usize = 5;
-const NAMED: usize = 20;
+const NAMED: usize = 50;
 /// How far a side sheet's time may sit from the line it belongs to and still be taken for it, in
 /// milliseconds. Wide enough for the tens the site's own two timelines differ by, narrow enough
 /// that a line never takes its neighbour's words.
@@ -165,11 +166,15 @@ impl LyricsProvider for NetEase {
             return Ok(sheet_hit(query, &sheet, EXACT).into_iter().collect());
         }
 
-        // The site is asked by name, and by the artist alone when that finds nothing that could be
-        // the recording: a service that romanizes its titles calls a Japanese song by its reading,
-        // which names nothing the site holds it under.
+        // The site is asked by name, then by the title alone, then by the artist alone. A service
+        // that romanizes its titles calls a Japanese song by its reading, which names nothing the
+        // site holds it under, and the title alone still finds it; the artist alone answers with
+        // that artist's best known songs, where the one asked for may sit far down the list.
         let wanted = format!("{} {}", query.title, query.artist);
         let mut songs = shortlist(self.search_songs(&wanted, HITS).await?, query);
+        if songs.is_empty() {
+            songs = shortlist(self.search_songs(&query.title, HITS).await?, query);
+        }
         if songs.is_empty() {
             songs = shortlist(self.search_songs(&query.artist, NAMED).await?, query);
         }
@@ -199,29 +204,48 @@ impl LyricsProvider for NetEase {
     }
 }
 
-/// The songs worth fetching sheets for: those that could be the recording being played, nearest in
-/// length first. A name search answers with records by other people and other songs of the same
-/// artist too, and one of those left in would take the place of a song that could be the one.
+/// The songs worth fetching sheets for: those that could be the recording being played, the ones
+/// whose names answer for it best first. A name search answers with records by other people and
+/// other songs of the same artist too, and one of those left in would take the place of a song that
+/// could be the one. Every one of them is already inside the window that counts as the same length,
+/// so what the two names say is worth more than the second or two one of them is off by, which is
+/// what fetching them in length order used to decide on.
 fn shortlist(songs: Vec<Song>, query: &LyricsQuery) -> Vec<Song> {
     let mut songs: Vec<Song> = songs
         .into_iter()
         .filter(|song| {
-            let artists: String = song
-                .artists
-                .iter()
-                .filter_map(|artist| artist.name.clone())
-                .collect::<Vec<_>>()
-                .join(", ");
-            crate::lyrics::could_be(query, &song.name, &artists, song.duration / 1_000)
+            crate::lyrics::could_be(query, &song.name, &credited(song), song.duration / 1_000)
         })
         .collect();
-    songs.sort_by_key(|song| {
-        Duration::from_millis(song.duration)
-            .as_secs()
-            .abs_diff(query.duration.as_secs())
+    songs.sort_by(|left, right| {
+        crate::lyrics::title_match(&right.name, &query.title)
+            .total_cmp(&crate::lyrics::title_match(&left.name, &query.title))
+            .then_with(|| {
+                crate::lyrics::artist_match(&credited(right), &query.artist)
+                    .total_cmp(&crate::lyrics::artist_match(&credited(left), &query.artist))
+            })
+            .then_with(|| {
+                Duration::from_millis(left.duration)
+                    .as_secs()
+                    .abs_diff(query.duration.as_secs())
+                    .cmp(
+                        &Duration::from_millis(right.duration)
+                            .as_secs()
+                            .abs_diff(query.duration.as_secs()),
+                    )
+            })
     });
     songs.truncate(CANDIDATES);
     songs
+}
+
+/// The credits the site lists for a song, as the one line the rest of the matching reads.
+fn credited(song: &Song) -> String {
+    song.artists
+        .iter()
+        .filter_map(|artist| artist.name.clone())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// One sheet as a hit, named by whoever asked for it: an id-exact fetch names it from the track
