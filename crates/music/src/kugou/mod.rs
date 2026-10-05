@@ -20,6 +20,8 @@ const DOWNLOAD: &str = "https://lyrics.kugou.com/download";
 const SONGS: usize = 4;
 const PAGE: usize = 20;
 const SHEETS: usize = 2;
+/// What the site files a reading of the words as, where a translation is filed as anything else.
+const READING: u8 = 0;
 const CIPHER: [u8; 16] = [
     0x40, 0x47, 0x61, 0x77, 0x5e, 0x32, 0x74, 0x47, 0x51, 0x36, 0x31, 0x2d, 0xce, 0xd2, 0x6e, 0x69,
 ];
@@ -177,10 +179,11 @@ struct Language {
 }
 
 /// One track of a language header: the line it holds for each of the sheet's timed lines, split
-/// into the pieces the site timed. What the track is filed as is left out, because the site files
-/// readings and translations alike.
+/// into the pieces the site timed, and what the site filed it as — a reading, or a translation.
 #[derive(Deserialize)]
 struct LanguageTrack {
+    #[serde(default, rename = "type")]
+    kind: Option<u8>,
     #[serde(default, rename = "lyricContent")]
     lines: Vec<Vec<String>>,
 }
@@ -431,10 +434,11 @@ fn stamp_of(stamp: &str) -> Option<(Duration, Duration)> {
     Some((Duration::from_millis(at), Duration::from_millis(length)))
 }
 
-/// The language tracks a sheet carries, each as one line for every one of the sheet's timed lines.
-/// The site hands them over as base64 json in the sheet's own `[language:…]` header, and files as
-/// many as whoever uploaded the sheet made: a reading, a translation, or a transliteration of the
-/// words, without saying which is which. A sheet with none answers nothing.
+/// The translations a sheet carries, each as one line for every one of the sheet's timed lines. The
+/// site hands them over as base64 json in the sheet's own `[language:…]` header, and files as many
+/// as whoever uploaded the sheet made, saying of each only whether it is a reading or the words in
+/// another language. What a line says is what the panel draws, so a reading is left out. A sheet
+/// with none answers nothing.
 fn tracks(krc: &str) -> Vec<Vec<String>> {
     let Some(payload) = krc
         .lines()
@@ -451,6 +455,7 @@ fn tracks(krc: &str) -> Vec<Vec<String>> {
     language
         .content
         .into_iter()
+        .filter(|track| track.kind != Some(READING))
         .map(|track| track.lines.into_iter().map(|line| line.concat()).collect())
         .collect()
 }
