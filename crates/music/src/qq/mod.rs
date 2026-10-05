@@ -14,7 +14,10 @@ use crate::lyrics::{lrc, sheet};
 use crate::{Lyrics, LyricsHit, LyricsLine, LyricsProvider, LyricsQuery};
 
 const SOURCE: &str = crate::lyrics::QQ;
-const SEARCH: &str = "https://c.y.qq.com/soso/fcgi-bin/client_search_cp";
+/// The site's search. The long-standing `client_search_cp` endpoint beside it now answers every
+/// search with a server error, and the mobile gateway answers most of them with an error code of its
+/// own, so this is the one that still finds anything.
+const SEARCH: &str = "https://c.y.qq.com/soso/fcgi-bin/search_for_qq_cp";
 const LYRIC: &str = "https://u.y.qq.com/cgi-bin/musicu.fcg";
 /// How many songs a name search may answer with, and how many of them are fetched a sheet for.
 const HITS: usize = 8;
@@ -84,7 +87,6 @@ impl QQ {
             .get(SEARCH)
             .query(&[
                 ("format", "json"),
-                ("new_json", "1"),
                 ("p", "1"),
                 ("n", &HITS.to_string()),
                 ("w", wanted),
@@ -204,17 +206,20 @@ impl LyricsProvider for QQ {
 }
 
 /// One song as the site's search lists it: what it is called, who sings it, and how long it runs.
+/// The search writes its fields the short way, which the aliases map onto the names the rest of the
+/// module reads: the fuller json api beside it is not the one that answers.
 #[derive(Deserialize)]
 struct Song {
+    #[serde(alias = "songmid")]
     mid: String,
-    #[serde(default)]
+    #[serde(default, alias = "songname")]
     title: String,
     #[serde(default)]
     interval: u64,
     #[serde(default)]
     singer: Vec<Named>,
     #[serde(default)]
-    album: Option<Named>,
+    albumname: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -333,7 +338,7 @@ fn hit(song: &Song, verses: &Verses, title: &str, trust: u32) -> Option<LyricsHi
         instrumental: false,
         title: song.title.clone(),
         artist: credited(song),
-        album: song.album.as_ref().and_then(|album| album.name.clone()),
+        album: song.albumname.clone(),
         duration: (song.interval > 0).then(|| Duration::from_secs(song.interval)),
         writers: Vec::new(),
     })
