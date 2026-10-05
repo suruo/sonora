@@ -440,14 +440,19 @@ fn artist_letters(claimed: &str, wanted: &str) -> f32 {
 }
 
 /// What a sheet is worth for the service answering a search for the track's title with it, when the
-/// title it carries is not one the letters here can name. The service matched a title written
-/// another way — its translation, its reading, or a name it is filed under elsewhere — which is a
-/// relationship these names cannot see, and only the service can vouch for. Worth what a sheet
-/// fetched by id is worth, which is the site telling us outright.
+/// title it carries is written in another script than the one asked for. The service matched a title
+/// written another way — its translation, or its reading — which is a relationship the letters here
+/// cannot see at all, and only the service can vouch for. Worth what a sheet fetched by id is worth,
+/// which is the site telling us outright.
+///
+/// A title in the same script is left to be weighed as it stands: what it shares with the track's own
+/// title, or adds to it, is all there under the letters, and a name that is two thirds of the track's
+/// says as much by being two thirds of it. Handing that one the trust as well would score a live take
+/// above the recording it was taken from.
 pub(crate) fn answered_by_title(claimed: &str, wanted: &str) -> u32 {
-    match names_the_track(claimed, wanted) {
-        true => 0,
-        false => catalog::TRUST,
+    match scripts_differ(claimed, wanted) && !names_the_track(claimed, wanted) {
+        true => catalog::TRUST,
+        false => 0,
     }
 }
 
