@@ -294,29 +294,15 @@ struct Verses {
     trans: String,
 }
 
-/// The songs worth fetching sheets for: those that could be the recording being played, the ones
-/// whose names answer for it best first. Every one of them is already inside the window that counts
-/// as the same length, so what the names say is worth more than the second one is off by.
+/// The songs worth fetching sheets for, out of what the site answered with.
 fn shortlist(songs: Vec<Song>, query: &LyricsQuery) -> Vec<Song> {
-    let mut songs: Vec<Song> = songs
-        .into_iter()
-        .filter(|song| crate::lyrics::could_be(query, &song.title, &credited(song)))
-        .collect();
-    songs.sort_by(|left, right| {
-        crate::lyrics::title_match(&right.title, &query.title)
-            .total_cmp(&crate::lyrics::title_match(&left.title, &query.title))
-            .then_with(|| {
-                crate::lyrics::artist_match(&credited(right), &query.artist)
-                    .total_cmp(&crate::lyrics::artist_match(&credited(left), &query.artist))
-            })
-            .then_with(|| {
-                left.interval
-                    .abs_diff(query.duration.as_secs())
-                    .cmp(&right.interval.abs_diff(query.duration.as_secs()))
-            })
-    });
-    songs.truncate(CANDIDATES);
-    songs
+    crate::lyrics::shortlist(
+        songs,
+        query,
+        CANDIDATES,
+        |song| (song.title.clone(), credited(song)),
+        |song| song.interval.abs_diff(query.duration.as_secs()),
+    )
 }
 
 /// One sheet as a hit, named from the record the search matched, with the translation the site wrote

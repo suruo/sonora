@@ -197,37 +197,19 @@ impl LyricsProvider for NetEase {
     }
 }
 
-/// The songs worth fetching sheets for: those that could be the recording being played, the ones
-/// whose names answer for it best first. A name search answers with records by other people and
-/// other songs of the same artist too, and one of those left in would take the place of a song that
-/// could be the one. Every one of them is already inside the window that counts as the same length,
-/// so what the two names say is worth more than the second or two one of them is off by, which is
-/// what fetching them in length order used to decide on.
+/// The songs worth fetching sheets for, out of what the site answered with.
 fn shortlist(songs: Vec<Song>, query: &LyricsQuery) -> Vec<Song> {
-    let mut songs: Vec<Song> = songs
-        .into_iter()
-        .filter(|song| crate::lyrics::could_be(query, &song.name, &credited(song)))
-        .collect();
-    songs.sort_by(|left, right| {
-        crate::lyrics::title_match(&right.name, &query.title)
-            .total_cmp(&crate::lyrics::title_match(&left.name, &query.title))
-            .then_with(|| {
-                crate::lyrics::artist_match(&credited(right), &query.artist)
-                    .total_cmp(&crate::lyrics::artist_match(&credited(left), &query.artist))
-            })
-            .then_with(|| {
-                Duration::from_millis(left.duration)
-                    .as_secs()
-                    .abs_diff(query.duration.as_secs())
-                    .cmp(
-                        &Duration::from_millis(right.duration)
-                            .as_secs()
-                            .abs_diff(query.duration.as_secs()),
-                    )
-            })
-    });
-    songs.truncate(CANDIDATES);
-    songs
+    crate::lyrics::shortlist(
+        songs,
+        query,
+        CANDIDATES,
+        |song| (song.name.clone(), credited(song)),
+        |song| {
+            Duration::from_millis(song.duration)
+                .as_secs()
+                .abs_diff(query.duration.as_secs())
+        },
+    )
 }
 
 /// The credits the site lists for a song, as the one line the rest of the matching reads.

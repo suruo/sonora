@@ -245,32 +245,15 @@ impl LyricsProvider for Kugou {
     }
 }
 
-/// The songs worth fetching sheets for: those that could be the recording being played, the ones
-/// whose names answer for it best first. The site answers a name search with its own idea of what
-/// fits, which includes other songs by the same artist and covers by other people, and every one of
-/// those left in would take the place of a song that could actually be the one being played. Every
-/// one of them is already inside the window that counts as the same length, so what the two names
-/// say is worth more than the second or two one of them is off by.
+/// The songs worth fetching sheets for, out of what the site answered with.
 fn shortlist(songs: Vec<Song>, query: &LyricsQuery) -> Vec<Song> {
-    let mut songs: Vec<Song> = songs
-        .into_iter()
-        .filter(|song| crate::lyrics::could_be(query, &song.name, &song.singer))
-        .collect();
-    songs.sort_by(|left, right| {
-        crate::lyrics::title_match(&right.name, &query.title)
-            .total_cmp(&crate::lyrics::title_match(&left.name, &query.title))
-            .then_with(|| {
-                crate::lyrics::artist_match(&right.singer, &query.artist)
-                    .total_cmp(&crate::lyrics::artist_match(&left.singer, &query.artist))
-            })
-            .then_with(|| {
-                left.duration
-                    .abs_diff(query.duration.as_secs())
-                    .cmp(&right.duration.abs_diff(query.duration.as_secs()))
-            })
-    });
-    songs.truncate(SONGS);
-    songs
+    crate::lyrics::shortlist(
+        songs,
+        query,
+        SONGS,
+        |song| (song.name.clone(), song.singer.clone()),
+        |song| song.duration.abs_diff(query.duration.as_secs()),
+    )
 }
 
 fn worded_first(candidates: Vec<Candidate>) -> Vec<Candidate> {

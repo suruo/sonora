@@ -46,10 +46,20 @@ const ALBUM: u32 = 15;
 const SYNCED: u32 = 200;
 const WORDED: u32 = 400;
 const TRUNCATED: u32 = 500;
-const TRUSTED: u32 = 25;
+/// What a sheet has to be worth for its own timing to be taken as the site's, rather than read
+/// against a plain sheet's: only what the site vouched for itself counts.
+const TRUSTED: u32 = catalog::TRUST;
 /// What a sheet is worth over an otherwise identical one for having come with a track
 /// beside the words.
 const CARRIED: u32 = 10;
+/// How much of a Latin name a non-Latin one has to read as for the two to be weighed at all when
+/// nothing else about them can be compared. A reading taken by machine is often wrong — 米津玄師
+/// comes out "mijinxuanshi" where a service filed the act under "Kenshi Yonezu" — but the words it
+/// does get right are still there, and a credit that shares none of them is another act.
+const READING_LEAST: f32 = 0.2;
+/// How much of a reading two credits have to share to be taken for one act written two ways. The
+/// same name in another character set reads the same way twice, so little is left to chance.
+const READING_SAME: f32 = 0.8;
 /// Rank the sheets that answer for a track, best first, whatever source each came from.
 pub fn rank(query: &LyricsQuery, hits: Vec<LyricsHit>) -> Vec<LyricsHit> {
     let mut scored: Vec<(bool, i64, LyricsHit)> = hits
@@ -90,7 +100,7 @@ pub fn rank(query: &LyricsQuery, hits: Vec<LyricsHit>) -> Vec<LyricsHit> {
 /// it. A remix, a live take or an instrumental is another recording whose words may differ, so
 /// its sheet answers only for the tracks nothing better names.
 fn names_the_track(claimed: &str, wanted: &str) -> bool {
-    title_letters(claimed, wanted) == 1.
+    title_match(claimed, wanted) == 1.
 }
 
 pub fn reshape(hits: &mut [LyricsHit]) {
@@ -167,15 +177,6 @@ fn drift(query: &LyricsQuery, hit: &LyricsHit) -> u64 {
     }
 }
 
-/// How much of a Latin name a non-Latin one has to read as for the two to be weighed at all when
-/// nothing else about them can be compared. A reading taken by machine is often wrong — 米津玄師
-/// comes out "mijinxuanshi" where a service filed the act under "Kenshi Yonezu" — but the words it
-/// does get right are still there, and a credit that shares none of them is another act.
-const READING_LEAST: f32 = 0.2;
-/// How much of a reading two credits have to share to be taken for one act written two ways. The
-/// same name in another character set reads the same way twice, so little is left to chance.
-const READING_SAME: f32 = 0.8;
-
 /// Whether a song a service lists could be the one being played, by its names alone. What is
 /// comparable has to agree: the title, or the credits. A title is compared by the letters it is
 /// written with and by nothing else: a service that romanizes its titles calls a Japanese song by
@@ -205,23 +206,109 @@ pub(crate) fn could_be(query: &LyricsQuery, title: &str, artist: &str) -> bool {
         && (credits || scripts_differ(artist, &query.artist))
 }
 
-/// How much of a track's own title a song's title answers for, from nothing to all of it, for a
-/// provider choosing which of its search's answers are worth fetching a sheet for. It is the measure
-/// the ranking weighs a title by, so the sheets fetched are the ones the ranking will want. A title
-/// is weighed by its letters alone, as it is matched.
-pub(crate) fn title_match(claimed: &str, wanted: &str) -> f32 {
-    title_letters(claimed, wanted)
+/// The songs worth fetching a sheet for, out of everything a name search answered with: the ones
+/// that could be the recording being played, the ones whose names answer for it best first. A name
+/// search answers with records by other people and other songs of the same artist too, and one of
+/// those left in would take the place of a song that could be the one. Every one of them is already
+/// inside the window that counts as the same length, so what the names say is worth more than the
+/// second or two one of them is off by. `keep` is how many a caller will fetch sheets for, and the
+/// names and the length are read through the caller's own fields.
+pub(crate) fn shortlist<T>(
+    songs: Vec<T>,
+    query: &LyricsQuery,
+    keep: usize,
+    names: impl Fn(&T) -> (String, String),
+    drift: impl Fn(&T) -> u64,
+) -> Vec<T> {
+    let mut found: Vec<(T, String, String, u64)> = songs
+        .into_iter()
+        .map(|song| {
+            let (title, artist) = names(&song);
+            let drift = drift(&song);
+            (song, title, artist, drift)
+        })
+        .filter(|(_, title, artist, _)| could_be(query, title, artist))
+        .collect();
+    found.sort_by(
+        |(_, left_title, left_artist, left_drift), (_, right_title, right_artist, right_drift)| {
+            title_match(right_title, &query.title)
+                .total_cmp(&title_match(left_title, &query.title))
+                .then_with(|| {
+                    artist_match(right_artist, &query.artist)
+                        .total_cmp(&artist_match(left_artist, &query.artist))
+                })
+                .then_with(|| left_drift.cmp(right_drift))
+        },
+    );
+    found.truncate(keep);
+    found.into_iter().map(|(song, ..)| song).collect()
 }
 
-/// How much of a track's own artist line a song's credit answers for, from nothing to all of it.
-/// A credit is weighed by its letters and by what it reads as, since the services write one act in
-/// another script as often as not.
-pub(crate) fn artist_match(claimed: &str, wanted: &str) -> f32 {
-    let (claimed, wanted) = (claimed.trim(), wanted.trim());
-    if claimed.is_empty() || wanted.is_empty() {
+/// How much of a track's own title a song's title answers for, from nothing to all of it: what the
+/// sheet adds to the words the two share, so a sheet that calls them a remix, a live take or an
+/// instrumental carries less of the track than one that names it the way the track names itself. A
+/// title is weighed by its letters alone, as it is matched, and two names that could never be one
+/// name are worth nothing to each other.
+pub(crate) fn title_match(claimed: &str, wanted: &str) -> f32 {
+    if !comparable(claimed, wanted) {
         return 0.;
     }
-    artist_letters(claimed, wanted).max(reading_similarity(claimed, wanted))
+    let claimed = spelled(claimed);
+    if claimed.is_empty() {
+        return 0.;
+    }
+    let mut spare: HashMap<char, usize> = HashMap::new();
+    for letter in spelled(wanted) {
+        *spare.entry(letter).or_default() += 1;
+    }
+    let added = claimed
+        .iter()
+        .filter(|letter| match spare.get_mut(letter) {
+            Some(left) if *left > 0 => {
+                *left -= 1;
+                false
+            }
+            _ => true,
+        })
+        .count();
+    1. - added as f32 / claimed.len() as f32
+}
+
+/// How much of a track's own artist line a song's credit answers for, from nothing to all of it. It
+/// reads the line as the names it is made of, and as with the title counts what the sheet adds: one
+/// that credits a remixer or a guest alongside the track's own artists carries less of the track
+/// than one that credits them alone, while a sheet that leaves one of several artists out is not
+/// held against it. A name answers for one of the track's own when it is spelt the same, holds the
+/// same words, or reads the same — the services write the same act in another script as often as
+/// not, and a credit line naming four people would otherwise be read as four strangers, scoring
+/// below one that names a single one of them.
+pub(crate) fn artist_match(claimed: &str, wanted: &str) -> f32 {
+    let (claimed, wanted) = (claimed.trim(), wanted.trim());
+    if claimed.is_empty() || wanted.is_empty() || !comparable(claimed, wanted) {
+        return 0.;
+    }
+    let parts = |line: &str| -> Vec<String> {
+        artist_names(line)
+            .map(undecorated)
+            .filter(|name| !name.is_empty())
+            .collect()
+    };
+    let (named, credited) = (parts(claimed), parts(wanted));
+    if named.is_empty() {
+        return 0.;
+    }
+    let added = named
+        .iter()
+        .filter(|name| {
+            !credited.iter().any(|other| {
+                name.as_str() == other.as_str()
+                    || held(name, other)
+                    || reading_similarity(name, other) >= READING_LEAST
+            })
+        })
+        .count();
+    let by_letters = 1. - added as f32 / named.len() as f32;
+    by_letters.max(reading_similarity(claimed, wanted))
 }
 
 /// Whether a title is written in Latin letters and no others.
@@ -307,17 +394,11 @@ pub fn score(query: &LyricsQuery, hit: &LyricsHit) -> i64 {
             .min(WAY_OFF - CLOSE_ENOUGH) as u32;
         score += i64::from(LENGTH.saturating_sub(past * LENGTH_STEP));
     }
-    if comparable(&hit.title, &query.title) {
-        score +=
-            (f64::from(TITLE) * f64::from(title_match(&hit.title, &query.title))).round() as i64;
-    }
-    if comparable(&hit.artist, &query.artist) {
-        score += (f64::from(ARTIST) * f64::from(artist_match(&hit.artist, &query.artist))).round()
-            as i64;
-    }
+    score += (f64::from(TITLE) * f64::from(title_match(&hit.title, &query.title))).round() as i64;
+    score +=
+        (f64::from(ARTIST) * f64::from(artist_match(&hit.artist, &query.artist))).round() as i64;
     if let Some(album) = &query.album
         && let Some(named) = &hit.album
-        && comparable(named, album)
     {
         score += (f64::from(ALBUM) * f64::from(title_match(named, album))).round() as i64;
     }
@@ -353,67 +434,6 @@ fn spelled(text: &str) -> Vec<char> {
 /// alone elsewhere.
 fn comparable(left: &str, right: &str) -> bool {
     alike(left, right) || scripts_differ(left, right)
-}
-
-/// How much of the track's own title a sheet's title carries, from none of it to all of it. What
-/// it measures is what the sheet adds to the words the two share: a sheet that calls them a
-/// remix, a live take or an instrumental carries less of the track than one that names it the way
-/// the track names itself, while a track whose own title carries its album's decoration is not
-/// held against a sheet that leaves that out.
-fn title_letters(claimed: &str, wanted: &str) -> f32 {
-    let claimed = spelled(claimed);
-    if claimed.is_empty() {
-        return 0.;
-    }
-
-    let mut spare: HashMap<char, usize> = HashMap::new();
-    for letter in spelled(wanted) {
-        *spare.entry(letter).or_default() += 1;
-    }
-    let added = claimed
-        .iter()
-        .filter(|letter| match spare.get_mut(letter) {
-            Some(left) if *left > 0 => {
-                *left -= 1;
-                false
-            }
-            _ => true,
-        })
-        .count();
-    1. - added as f32 / claimed.len() as f32
-}
-
-/// How much of the track's own artist line a sheet's artist line carries, from none of it to all
-/// of it. It reads the line as the names it is made of, and as with the title counts what the
-/// sheet adds: one that credits a remixer or a guest alongside the track's own artists carries
-/// less of the track than one that credits them alone, while a sheet that leaves one of several
-/// artists out is not held against it. A name answers for one of the track's own when it is spelt
-/// the same, holds the same words, or reads the same — the services write the same act in another
-/// script as often as not, and a credit line naming four people would otherwise be read as four
-/// strangers, scoring below one that names a single one of them.
-fn artist_letters(claimed: &str, wanted: &str) -> f32 {
-    let claimed: Vec<String> = artist_names(claimed)
-        .map(undecorated)
-        .filter(|name| !name.is_empty())
-        .collect();
-    if claimed.is_empty() {
-        return 0.;
-    }
-    let wanted: Vec<String> = artist_names(wanted)
-        .map(undecorated)
-        .filter(|name| !name.is_empty())
-        .collect();
-    let added = claimed
-        .iter()
-        .filter(|name| {
-            !wanted.iter().any(|wanted| {
-                name.as_str() == wanted.as_str()
-                    || held(name, wanted)
-                    || reading_similarity(name, wanted) >= READING_LEAST
-            })
-        })
-        .count();
-    1. - added as f32 / claimed.len() as f32
 }
 
 /// What a sheet is worth for the service answering a search for the track's title with it, when the
@@ -540,19 +560,13 @@ fn written_into(claimed: &str, wanted: &str) -> bool {
     !wanted.is_empty() && undecorated(claimed).contains(&wanted)
 }
 
-/// Whether two names read the same, near enough to be one name written two ways. This is what
-/// catches a name the two sides write in different character sets: a Chinese storefront writes
-/// 米津玄师 where the services write 米津玄師, and not a character of one is in the other, but both
-/// read "mijinxuanshi". Two names written the same way differ by whole readings instead, which is
-/// why most of the reading has to agree.
-fn reads_alike(left: &str, right: &str) -> bool {
-    reading_similarity(left, right) >= READING_SAME
-}
-
 /// Whether two names are one name written two ways, by their letters or, when the letters cannot
-/// compare them, by what they read as.
+/// compare them, by what they read as. This is what catches a name the two sides write in different
+/// character sets: a Chinese storefront writes 米津玄师 where the services write 米津玄師, and not a
+/// character of one is in the other, but both read "mijinxuanshi". Two names written the same way
+/// differ by whole readings instead, which is why most of the reading has to agree.
 fn names_alike(left: &str, right: &str) -> bool {
-    alike(left, right) || reads_alike(left, right)
+    alike(left, right) || reading_similarity(left, right) >= READING_SAME
 }
 
 /// Whether two credited-artist lines name anyone in common. Shared with the providers, as [`alike`]
