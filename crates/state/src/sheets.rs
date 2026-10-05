@@ -10,8 +10,9 @@ use music::{Lyrics as Sheet, LyricsHit};
 use serde::{Deserialize, Serialize};
 
 /// The shape of a stored sheet. A sheet stored by an older version is ignored rather than
-/// migrated, so a change to what a hit holds has to raise this.
-const VERSION: u32 = 8;
+/// migrated, so a change to what a hit holds, or to which hits answer for a track at all, has to
+/// raise this.
+const VERSION: u32 = 9;
 const PASSING: bool = cfg!(debug_assertions);
 const CAPACITY: usize = 500;
 
