@@ -17,6 +17,9 @@ pub const LOCAL: &str = "Local";
 /// one of these, so a caller can tell them apart.
 pub const NETEASE: &str = "NetEase";
 pub const KUGOU: &str = "Kugou";
+/// The third of them, which hands over a translation of its own beside most of the foreign songs it
+/// holds.
+pub const QQ: &str = "QQ Music";
 
 const CLOSE_ENOUGH: u64 = 3;
 /// How far a sheet's own length may sit from the track's and still answer for it, in seconds, for

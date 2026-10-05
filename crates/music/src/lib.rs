@@ -19,6 +19,7 @@ pub mod musixmatch;
 pub mod netease;
 pub mod potoken;
 pub mod progress;
+pub mod qq;
 pub mod scrobble;
 mod sink;
 mod spectrum;

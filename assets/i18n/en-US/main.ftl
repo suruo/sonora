@@ -680,6 +680,7 @@ settings-lyrics-provider-musixmatch = Musixmatch
 settings-lyrics-provider-lrclib = LRCLIB
 settings-lyrics-provider-kugou = Kugou
 settings-lyrics-provider-netease = NetEase
+settings-lyrics-provider-qq = QQ Music
 settings-romanization-japanese = Japanese
 settings-romanization-chinese = Chinese
 settings-romanization-korean = Korean

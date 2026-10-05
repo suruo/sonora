@@ -4153,6 +4153,7 @@ fn lyrics_providers() -> &'static [(&'static str, &'static str)] {
         ("LrcLib", "settings-lyrics-provider-lrclib"),
         ("Kugou", "settings-lyrics-provider-kugou"),
         ("NetEase", "settings-lyrics-provider-netease"),
+        ("QQ Music", "settings-lyrics-provider-qq"),
     ]
 }
 
