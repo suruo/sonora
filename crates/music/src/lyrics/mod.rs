@@ -410,7 +410,10 @@ fn title_letters(claimed: &str, wanted: &str) -> f32 {
 /// of it. It reads the line as the names it is made of, and as with the title counts what the
 /// sheet adds: one that credits a remixer or a guest alongside the track's own artists carries
 /// less of the track than one that credits them alone, while a sheet that leaves one of several
-/// artists out is not held against it.
+/// artists out is not held against it. A name answers for one of the track's own when it is spelt
+/// the same, holds the same words, or reads the same — the services write the same act in another
+/// script as often as not, and a credit line naming four people would otherwise be read as four
+/// strangers, scoring below one that names a single one of them.
 fn artist_letters(claimed: &str, wanted: &str) -> f32 {
     let claimed: Vec<String> = artist_names(claimed)
         .map(undecorated)
@@ -423,7 +426,16 @@ fn artist_letters(claimed: &str, wanted: &str) -> f32 {
         .map(undecorated)
         .filter(|name| !name.is_empty())
         .collect();
-    let added = claimed.iter().filter(|name| !wanted.contains(name)).count();
+    let added = claimed
+        .iter()
+        .filter(|name| {
+            !wanted.iter().any(|wanted| {
+                name.as_str() == wanted.as_str()
+                    || held(name, wanted)
+                    || reading_similarity(name, wanted) >= READING_LEAST
+            })
+        })
+        .count();
     1. - added as f32 / claimed.len() as f32
 }
 
