@@ -439,6 +439,18 @@ fn artist_letters(claimed: &str, wanted: &str) -> f32 {
     1. - added as f32 / claimed.len() as f32
 }
 
+/// What a sheet is worth for the service answering a search for the track's title with it, when the
+/// title it carries is not one the letters here can name. The service matched a title written
+/// another way — its translation, its reading, or a name it is filed under elsewhere — which is a
+/// relationship these names cannot see, and only the service can vouch for. Worth what a sheet
+/// fetched by id is worth, which is the site telling us outright.
+pub(crate) fn answered_by_title(claimed: &str, wanted: &str) -> u32 {
+    match names_the_track(claimed, wanted) {
+        true => 0,
+        false => catalog::TRUST,
+    }
+}
+
 fn truncated(lyrics: &Lyrics, duration: Duration) -> bool {
     let Some(span) = lyrics.span() else {
         return false;

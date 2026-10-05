@@ -170,17 +170,26 @@ impl LyricsProvider for NetEase {
         // that artist's best known songs, where the one asked for may sit far down the list.
         let wanted = format!("{} {}", query.title, query.artist);
         let mut songs = shortlist(self.search_songs(&wanted, HITS).await?, query);
+        let mut by_title = true;
         if songs.is_empty() {
             songs = shortlist(self.search_songs(&query.title, HITS).await?, query);
         }
         if songs.is_empty() {
             songs = shortlist(self.search_songs(&query.artist, NAMED).await?, query);
+            by_title = false;
         }
 
         let mut tasks = JoinSet::new();
         for song in songs {
             let netease = Self {
                 http: self.http.clone(),
+            };
+            let named = song_query(&song);
+            // a search that named the title and came back with a sheet whose own title cannot be
+            // compared with it matched something only the site can see
+            let trust = match by_title {
+                true => crate::lyrics::answered_by_title(&named.title, &query.title),
+                false => GUESSED,
             };
             tasks.spawn(async move {
                 let sheet = netease
@@ -190,7 +199,7 @@ impl LyricsProvider for NetEase {
                         log::warn!("lyrics: netease did not hand over {}: {error:#}", song.id)
                     })
                     .ok()?;
-                sheet_hit(&song_query(&song), &sheet, GUESSED)
+                sheet_hit(&named, &sheet, trust)
             });
         }
 
@@ -658,5 +667,54 @@ mod tests {
         let picked = shortlist(songs, &named("Jaded", "Spiritbox", 263));
         let ids: Vec<u64> = picked.iter().map(|song| song.id).collect();
         assert_eq!(ids, vec![3]);
+    }
+}
+
+#[cfg(test)]
+mod temporary_probe {
+    use super::*;
+
+    #[tokio::test]
+    async fn steps() {
+        rustls::crypto::ring::default_provider()
+            .install_default()
+            .ok();
+        let query = LyricsQuery {
+            title: "Memories of You -Reload-".to_owned(),
+            artist: "Atlus Sound Team".to_owned(),
+            album: None,
+            duration: Duration::from_secs(399),
+            track: None,
+        };
+        for (label, wanted, limit) in [
+            (
+                "歌名+艺人",
+                format!("{} {}", query.title, query.artist),
+                HITS,
+            ),
+            ("只搜歌名", query.title.clone(), HITS),
+            ("只搜艺人", query.artist.clone(), NAMED),
+        ] {
+            let songs = NetEase::new()
+                .search_songs(&wanted, limit)
+                .await
+                .unwrap_or_default();
+            let count = songs.len();
+            let passing = shortlist(songs, &query);
+            println!(
+                "### 网易云 {label} {wanted:?}: 返回 {count} 条, 过门槛 {} 条",
+                passing.len()
+            );
+            for song in &passing {
+                let artists: Vec<String> =
+                    song.artists.iter().filter_map(|a| a.name.clone()).collect();
+                println!(
+                    "   收 {:?} / {:?} / {}s",
+                    song.name,
+                    artists.join(", "),
+                    song.duration / 1000
+                );
+            }
+        }
     }
 }

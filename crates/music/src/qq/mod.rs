@@ -170,11 +170,13 @@ impl LyricsProvider for QQ {
         // site holds it under, and the title alone still finds it.
         let wanted = format!("{} {}", query.title, query.artist);
         let mut songs = shortlist(self.songs(&wanted).await?, query);
+        let mut by_title = true;
         if songs.is_empty() {
             songs = shortlist(self.songs(&query.title).await?, query);
         }
         if songs.is_empty() {
             songs = shortlist(self.songs(&query.artist).await?, query);
+            by_title = false;
         }
 
         let mut tasks = JoinSet::new();
@@ -183,6 +185,12 @@ impl LyricsProvider for QQ {
                 http: self.http.clone(),
             };
             let title = query.title.clone();
+            // a search that named the title and came back with a sheet whose own title cannot be
+            // compared with it matched something only the site can see
+            let trust = match by_title {
+                true => crate::lyrics::answered_by_title(&song.title, &title),
+                false => 0,
+            };
             tasks.spawn(async move {
                 let verses = qq
                     .lyric(&song.mid)
@@ -191,7 +199,7 @@ impl LyricsProvider for QQ {
                         log::warn!("lyrics: qq music did not hand over {}: {error:#}", song.mid)
                     })
                     .ok()??;
-                hit(&song, &verses, &title)
+                hit(&song, &verses, &title, trust)
             });
         }
 
@@ -321,7 +329,7 @@ fn shortlist(songs: Vec<Song>, query: &LyricsQuery) -> Vec<Song> {
 
 /// One sheet as a hit, named from the record the search matched, with the translation the site wrote
 /// beside its words as the track the panel can switch to.
-fn hit(song: &Song, verses: &Verses, title: &str) -> Option<LyricsHit> {
+fn hit(song: &Song, verses: &Verses, title: &str, trust: u32) -> Option<LyricsHit> {
     let lines = lrc::parse(&text(&verses.lyric));
     if lines.is_empty() {
         return None;
@@ -340,7 +348,7 @@ fn hit(song: &Song, verses: &Verses, title: &str) -> Option<LyricsHit> {
 
     Some(LyricsHit {
         source: SOURCE,
-        trust: 0,
+        trust,
         lyrics: Lyrics::Synced {
             lines: lines.into(),
         },
@@ -455,4 +463,44 @@ fn credited_parts(song: &Song) -> Vec<String> {
         .filter_map(|singer| singer.name.clone())
         .filter(|name| !name.is_empty())
         .collect()
+}
+
+#[cfg(test)]
+mod temporary_probe {
+    use super::*;
+
+    #[tokio::test]
+    async fn steps() {
+        rustls::crypto::ring::default_provider()
+            .install_default()
+            .ok();
+        let query = LyricsQuery {
+            title: "Memories of You -Reload-".to_owned(),
+            artist: "Atlus Sound Team".to_owned(),
+            album: None,
+            duration: Duration::from_secs(399),
+            track: None,
+        };
+        for (label, wanted) in [
+            ("歌名+艺人", format!("{} {}", query.title, query.artist)),
+            ("只搜歌名", query.title.clone()),
+            ("只搜艺人", query.artist.clone()),
+        ] {
+            let songs = QQ::new().songs(&wanted).await.unwrap_or_default();
+            let count = songs.len();
+            let passing = shortlist(songs, &query);
+            println!(
+                "### QQ {label} {wanted:?}: 返回 {count} 条, 过门槛 {} 条",
+                passing.len()
+            );
+            for song in &passing {
+                println!(
+                    "   收 {:?} / {:?} / {}s",
+                    song.title,
+                    credited(song),
+                    song.interval
+                );
+            }
+        }
+    }
 }

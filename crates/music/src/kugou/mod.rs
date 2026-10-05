@@ -201,11 +201,13 @@ impl LyricsProvider for Kugou {
         // that artist's best known songs, where the one asked for may sit far down the list.
         let wanted = format!("{} {}", query.artist, query.title);
         let mut songs = shortlist(self.songs(&wanted).await?, query);
+        let mut by_title = true;
         if songs.is_empty() {
             songs = shortlist(self.songs(&query.title).await?, query);
         }
         if songs.is_empty() {
             songs = shortlist(self.songs(&query.artist).await?, query);
+            by_title = false;
         }
 
         let mut tasks = JoinSet::new();
@@ -214,6 +216,12 @@ impl LyricsProvider for Kugou {
                 http: self.http.clone(),
             };
             let title = query.title.clone();
+            // a search that named the title and came back with a sheet whose own title cannot be
+            // compared with it matched something only the site can see
+            let trust = match by_title {
+                true => crate::lyrics::answered_by_title(&song.name, &title),
+                false => 0,
+            };
             tasks.spawn(async move {
                 let candidates = kugou
                     .candidates(&song)
@@ -232,7 +240,7 @@ impl LyricsProvider for Kugou {
                     }) else {
                         continue;
                     };
-                    hits.extend(hit(&song, &krc, &title));
+                    hits.extend(hit(&song, &krc, &title, trust));
                 }
                 Some(hits)
             });
@@ -300,7 +308,7 @@ fn decode(content: &str) -> Result<String> {
     Ok(text)
 }
 
-fn hit(song: &Song, krc: &str, title: &str) -> Option<LyricsHit> {
+fn hit(song: &Song, krc: &str, title: &str, trust: u32) -> Option<LyricsHit> {
     let mut lines = parse(krc, &tracks(krc));
     let artists: Vec<String> = song
         .singer
@@ -320,7 +328,7 @@ fn hit(song: &Song, krc: &str, title: &str) -> Option<LyricsHit> {
 
     Some(LyricsHit {
         source: SOURCE,
-        trust: 0,
+        trust,
         lyrics: match quiet {
             true => Lyrics::plain(""),
             false => Lyrics::Synced {
