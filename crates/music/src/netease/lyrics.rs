@@ -141,8 +141,6 @@ struct Sheet {
     yrc: Option<Verse>,
     /// The translation, which the site hands over as a sheet of its own, timed like the lyric.
     tlyric: Option<Verse>,
-    /// The reading, handed over the same way and timed the same way.
-    romalrc: Option<Verse>,
     #[serde(default, rename = "pureMusic")]
     pure_music: bool,
 }
@@ -256,14 +254,34 @@ fn sheet_hit(named: &LyricsQuery, sheet: &Sheet, trust: u32) -> Option<LyricsHit
             .and_then(|verse| verse.lyric.clone())
             .filter(|text| !text.trim().is_empty())
     };
-    let lines = lyric(&sheet.yrc)
+    // The site holds a word-by-word sheet and a line-timed one, and the translation it wrote goes
+    // with whichever of them it timed that translation against. On a track whose two sheets are cut
+    // differently — the orchestral take of a song against the single it came from — the word-by-word
+    // sheet carries another version's timing, so the sheet the translation sits on is the one that
+    // can be shown with it: words and their translation together are worth more than the word-by-word
+    // timing. Where the two agree, or where the site wrote no translation, the word-by-word sheet
+    // still wins.
+    let translation = lyric(&sheet.tlyric);
+    let side = translation
+        .as_deref()
+        .map(stamped_lines)
+        .unwrap_or_default();
+    let worded = lyric(&sheet.yrc)
         .map(|yrc| parse_yrc(&yrc))
-        .filter(|lines| !lines.is_empty())
-        .or_else(|| {
-            lyric(&sheet.lrc)
-                .map(|text| lrc::parse(&text))
-                .filter(|lines| !lines.is_empty())
-        });
+        .filter(|lines| !lines.is_empty());
+    let timed = lyric(&sheet.lrc)
+        .map(|text| lrc::parse(&text))
+        .filter(|lines| !lines.is_empty());
+    let lines = match (worded, timed) {
+        (Some(worded), Some(timed)) => match (
+            pairs_by_place(&side, &worded),
+            pairs_by_place(&side, &timed),
+        ) {
+            (false, true) => Some(timed),
+            _ => Some(worded),
+        },
+        (worded, timed) => worded.or(timed),
+    };
     let quiet = sheet.pure_music
         || lines
             .as_deref()
@@ -281,7 +299,7 @@ fn sheet_hit(named: &LyricsQuery, sheet: &Sheet, trust: u32) -> Option<LyricsHit
             if !crate::lyrics::sheet::headed(&mut lines, &named.title, &artists) {
                 return None;
             }
-            add_tracks(&mut lines, sheet);
+            add_tracks(&mut lines, translation.as_deref());
             Lyrics::Synced {
                 lines: lines.into(),
             }
@@ -373,35 +391,25 @@ fn parse_yrc(yrc: &str) -> Vec<LyricsLine> {
 /// sheet in the order the sheet files them. The site times those the way it times the lyric, so
 /// they are paired by their stamps rather than by their order, and a line a side sheet does not
 /// name keeps an empty entry of its own so the tracks stay lined up.
-fn add_tracks(lines: &mut [LyricsLine], sheet: &Sheet) {
-    let mut tracks: Vec<Side> = Vec::new();
-    for verse in [&sheet.tlyric, &sheet.romalrc] {
-        let Some(text) = verse.as_ref().and_then(|verse| verse.lyric.as_deref()) else {
-            continue;
-        };
-        let stamped = stamped_lines(text);
-        if !stamped.is_empty() {
-            tracks.push(Side {
-                stamped,
-                pairs: false,
-            });
-        }
-    }
-    if tracks.is_empty() {
+fn add_tracks(lines: &mut [LyricsLine], translation: Option<&str>) {
+    let Some(text) = translation else {
+        return;
+    };
+    let stamped = stamped_lines(text);
+    if stamped.is_empty() {
         return;
     }
-    for track in &mut tracks {
-        track.pairs = pairs_by_place(track.stamped.as_slice(), lines);
-    }
+    let side = Side {
+        pairs: pairs_by_place(&stamped, lines),
+        stamped,
+    };
     for (place, line) in lines.iter_mut().enumerate() {
-        for track in &tracks {
-            line.tracks.push(track.words(line.start, place));
-        }
+        line.tracks.push(side.words(line.start, place));
     }
 }
 
-/// A side sheet with the times it was written at, and whether those times can be taken as one per
-/// line of the lyric.
+/// The translation the site wrote, with the times it was written at, and whether those times can be
+/// taken as one per line of the lyric.
 struct Side {
     stamped: Vec<(Duration, String)>,
     pairs: bool,
